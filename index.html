@@ -78,6 +78,15 @@ nav button[aria-current="true"]{box-shadow:0 2px 0 var(--gold)}
 .tbl td.n,.tbl th.n{text-align:left;white-space:nowrap}
 .tbl th{color:var(--mut);font-weight:700}
 @media print{header,nav,#pb,.noprint,.back{display:none!important}body{background:#fff;color:#000}.panel{border:0;box-shadow:none}}
+.chip,.btn,nav button,.hb{min-height:40px}
+.sub{display:flex;gap:6px;overflow-x:auto;padding:4px 0 8px;scrollbar-width:none}.sub::-webkit-scrollbar{display:none}.sub .chip{flex:0 0 auto}
+.sv{display:inline-block;font-size:11px;font-weight:800;padding:1px 8px;border-radius:99px;margin-inline-start:6px}
+.sv3{background:rgba(180,35,24,.15);color:var(--debt)}.sv2{background:rgba(201,162,39,.22);color:var(--gold)}.sv1{background:var(--bg);color:var(--mut)}
+tr[data-k]{cursor:pointer}tr[data-k]:active{background:var(--bg)}
+.tbl tfoot td{font-weight:800;border-top:2px solid var(--line)}
+.ctl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
+.ctl label{font-size:12px;color:var(--mut)}
+.okbox{background:rgba(26,127,55,.12);border:1px solid rgba(26,127,55,.35);color:var(--ok);padding:10px 12px;border-radius:12px;margin-top:10px}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -282,10 +291,11 @@ async function commit(kind,res,fileName){
 }
 
 /* ---------- الحالة والعرض ---------- */
-const st={user:null,rows:null,rep:null,asort:"desc",meta:{},q:"",sort:"name",debtOnly:false,tab:"list",logs:null,me:null,pending:0,signingUp:false,unsub:null};
+const st={user:null,rows:null,rep:null,led:undefined,al:{tab:"all",days:30},asort:"desc",meta:{},q:"",sort:"name",debtOnly:false,tab:"list",logs:null,me:null,pending:0,signingUp:false,unsub:null};
 const pending={};
 const app=document.getElementById("app");
-const isAdmin=()=>st.user&&st.user.uid===ADMIN_UID;
+const isRoot=()=>!!st.user&&st.user.uid===ADMIN_UID;
+const isAdmin=()=>!!st.user&&(st.user.uid===ADMIN_UID||(!!st.me&&st.me.role==="admin"&&st.me.status==="approved"));
 const authMsg=c=>({"auth/invalid-credential":"البريد أو كلمة السر غير صحيحة","auth/invalid-email":"البريد الإلكتروني غير صحيح","auth/user-disabled":"الحساب ده موقوف","auth/too-many-requests":"محاولات كتير، جرّب بعد شوية","auth/network-request-failed":"مفيش اتصال بالإنترنت","auth/email-already-in-use":"البريد ده مسجّل قبل كده، جرّب تسجّل دخول","auth/weak-password":"كلمة السر ضعيفة (6 حروف على الأقل)","auth/admin-restricted-operation":"التسجيل الجديد مقفول حالياً","auth/operation-not-allowed":"التسجيل الجديد مقفول حالياً"}[c]||"تعذّر تسجيل الدخول");
 const errBox=e=>`<div class="err">${e&&e.code==="permission-denied"?"ليس لديك صلاحية لعرض هذه البيانات":"تعذّر تحميل البيانات. تأكد من الإنترنت وجرّب تاني"}</div>`;
 
@@ -300,7 +310,7 @@ onAuthStateChanged(auth,async u=>{
 async function boot(){
   drawShell('<div class="empty">جاري التحميل…</div>');
   try{
-    if(isAdmin()){watchPending();await loadData();show("list");return}
+    if(isAdmin()){watchPending();await loadData();show("home");return}
     const [me,ld]=await Promise.all([getDoc(doc(db,"users",st.user.uid)),loadData().then(()=>true,()=>false)]);
     if(me.exists())st.me=me.data();
     else{
@@ -310,7 +320,8 @@ async function boot(){
     if(st.me.status!=="approved"){showGate();return}
     setDoc(doc(db,"users",st.user.uid),{lastSeen:Date.now(),visits:(st.me.visits||0)+1},{merge:true}).catch(()=>{});
     if(!ld)await loadData();
-    show("list");
+    if(isAdmin())watchPending();
+    show("home");
   }catch(e){drawShell(errBox(e))}
 }
 async function loadData(){
@@ -350,7 +361,7 @@ function showLogin(mode="in"){
   };
 }
 function drawShell(inner){
-  const tabs=[["list","العملاء"],["rep","التقارير"],["alert","التنبيهات"],["idle","الأقل نشاطاً"]];
+  const tabs=[["home","الرئيسية"],["list","العملاء"],["rep","التقارير"],["alert","التنبيهات"],["idle","الأقل نشاطاً"]];
   if(isAdmin())tabs.push(["users","المستخدمين"+(st.pending?` (${st.pending})`:"")],["admin","رفع الملفات"]);
   app.innerHTML=`<header><b>الحاج سلامة للمجمدات</b><span><button class="hb" data-act="reload">تحديث</button> <button class="hb" data-act="logout">خروج</button></span></header><nav>${tabs.map(([k,l])=>`<button data-tab="${k}" ${st.tab===k?'aria-current="true"':""}>${l}</button>`).join("")}</nav><div id="pb" style="max-width:680px;margin:0 auto;padding:0 14px"></div><main id="main">${inner||""}</main>`;
   updBanner();
@@ -375,8 +386,9 @@ function show(tab){
   st.tab=tab;
   if(tab==="list"){drawShell(listHtml());drawList()}
   else if(tab==="idle")drawShell(idleHtml());
-  else if(tab==="rep")drawShell(repHtml());
-  else if(tab==="alert")drawShell(alertHtml());
+  else if(tab==="home")drawShell(homeHtml());
+  else if(tab==="rep")repShow();
+  else if(tab==="alert")alShow();
   else if(tab==="users"){drawShell('<div id="ulist" class="empty">جاري التحميل…</div>');usersInit()}
   else{drawShell("");adminInit()}
   scrollTo(0,0);
@@ -410,6 +422,12 @@ function stmtCalc(bal,inv,pay,from,to){
   let run=open;
   const rows=mv.filter(m=>m.d>=from&&m.d<=to).map(m=>{run=r2(run+m.dr-m.cr);return {...m,bal:run}});
   return {open,rows,close:run,dr:r2(rows.reduce((s,m)=>s+m.dr,0)),cr:r2(rows.reduce((s,m)=>s+m.cr,0))};
+}
+function daySum(c,inv,pay,i){
+  const d=inv[i].d;if(i&&inv[i-1].d===d)return"";
+  if(c.bal==null||!/^\d{4}-\d{2}-\d{2}$/.test(d||""))return"";
+  const R=stmtCalc(c.bal,inv,pay,d,d);
+  return `<div class="panel" style="margin:12px 0 4px"><b>ملخص حساب العميل يوم ${fd(d)}</b><div class="mut" style="line-height:1.9">رصيد أول اليوم: <b>${fm(R.open)}</b><br>مشتريات اليوم: <b>${fm(R.dr)}</b><br>مدفوعات اليوم: <b>${fm(R.cr)}</b><br>مرتجعات اليوم: غير محسوبة لسه<br>رصيد آخر اليوم: <b>${fm(R.close)}</b></div></div>`;
 }
 function stmtView(c,inv,pay){
   const today=iso(new Date()),all=[...inv,...pay].map(x=>x.d).sort(),minD=all[0]||"";
@@ -445,7 +463,7 @@ async function openCustomer(k){
   const last=inv[0];let tab="s";
   const draw=()=>{
     $("#dd").className="";
-    $("#dd").innerHTML=`<div class="panel"><div class="mut">آخر فاتورة</div>${last?`<div style="font-weight:800">${fm(last.t)} بتاريخ ${fd(last.d)}</div><div class="mut">رقم ${esc(last.no)} · مدفوع ${fm(last.p)} · متبقي من الفاتورة ${fm(last.r)}</div>`:'<div class="mut">لا توجد فواتير في الفترة المحفوظة</div>'}</div><div class="chips"><button class="chip" id="stb">كشف حساب</button></div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?(inv.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">رقم ${esc(r.no)}${r.s?" · "+esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></span><span style="text-align:left"><span class="mut">قيمة الفاتورة</span> <b>${fm(r.t)}</b><br><span class="mut">مدفوع ${fm(r.p)} · متبقي من الفاتورة ${fm(r.r)}</span><br><span class="bal">رصيد حساب العميل الحالي: <b class="${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</b></span></span></div>`).join("")||'<div class="empty">لا توجد فواتير</div>'):(pay.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">${esc(r.x||"")}</span></span><b class="ok">${fm(r.a)}</b></div>`).join("")||'<div class="empty">لا توجد دفعات</div>')}</div>`;
+    $("#dd").innerHTML=`<div class="panel"><div class="mut">آخر فاتورة</div>${last?`<div style="font-weight:800">${fm(last.t)} بتاريخ ${fd(last.d)}</div><div class="mut">رقم ${esc(last.no)} · مدفوع ${fm(last.p)} · متبقي من الفاتورة ${fm(last.r)}</div>`:'<div class="mut">لا توجد فواتير في الفترة المحفوظة</div>'}</div><div class="chips"><button class="chip" id="stb">كشف حساب</button></div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?(inv.map((r,i)=>daySum(c,inv,pay,i)+`<div class="item"><span>${fd(r.d)}<br><span class="mut">رقم ${esc(r.no)}${r.s?" · "+esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></span><span style="text-align:left"><span class="mut">قيمة الفاتورة</span> <b>${fm(r.t)}</b><br><span class="mut">مدفوع ${fm(r.p)} · متبقي من الفاتورة ${fm(r.r)}</span><br><span class="bal">رصيد حساب العميل الحالي: <b class="${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</b></span></span></div>`).join("")||'<div class="empty">لا توجد فواتير</div>'):(pay.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">${esc(r.x||"")}</span></span><b class="ok">${fm(r.a)}</b></div>`).join("")||'<div class="empty">لا توجد دفعات</div>')}</div>`;
     $("#dd").querySelector(".tabs").onclick=e=>{const b=e.target.closest("[data-t]");if(b){tab=b.dataset.t;draw()}};
     $("#stb").onclick=()=>stmtView(c,inv,pay);
   };
@@ -460,23 +478,114 @@ const prevYM=()=>{const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);ret
 const Z={n:0,t:0,p:0,r:0,s:[],c:[]};
 const repEmpty=()=>`<div class="warn">التقارير لسه متحسبتش.${isAdmin()?' <button class="chip" data-act="rebuild">احسب التقارير</button>':" المدير لازم يحدّثها."}</div>`;
 const chg=(a,b)=>{if(!b)return a?'<span class="chg ok">جديد</span>':"";const p=Math.round((a-b)/b*100);return `<span class="chg ${p>=0?"ok":"debt"}">${p>=0?"▲":"▼"} ${Math.abs(p)}%</span>`};
+/* ---------- دفتر الحركات (للتقارير بتواريخ) ---------- */
+const dn=s=>{const [y,m,d]=String(s).split("-").map(Number);return Math.round(Date.UTC(y,m-1,d)/864e5)};
+const dIso=n=>new Date(n*864e5).toISOString().slice(0,10);
+const isD=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||"");
+function mkLedger(invs,pays){
+  const ck=[],cn=[],ix=new Map(),sn=[],sx=new Map(),iv=[],pv=[];
+  const ci=(k,n)=>{let i=ix.get(k);if(i===undefined){i=ck.length;ix.set(k,i);ck.push(k);cn.push(n||"")}return i};
+  for(const d of invs)for(const i of d.list||[]){if(!isD(i.d))continue;const nm=i.s||"بدون اسم";let s=sx.get(nm);if(s===undefined){s=sn.length;sx.set(nm,s);sn.push(nm)}iv.push(ci(d.k,d.n),dn(i.d),i.t||0,s)}
+  for(const d of pays)for(const p of d.list||[]){if(!isD(p.d))continue;pv.push(ci(d.k,d.n),dn(p.d),p.a||0)}
+  const at=Date.now();
+  return {inv:{at,ck,cn,sn,v:iv},pay:{at,ck,cn,v:pv}};
+}
+function repTables(tab,a,b,L,rows){
+  const I=L.inv,iv=I.v,pv=L.pay.v,A=dn(a),B=dn(b);
+  const pick=(v,w)=>{const o=[];for(let i=0;i<v.length;i+=w)if(v[i+1]>=A&&v[i+1]<=B)o.push(i);return o};
+  const ii=pick(iv,4),pi=pick(pv,3);
+  const S=r2(ii.reduce((s,i)=>s+iv[i+2],0)),C=r2(pi.reduce((s,i)=>s+pv[i+2],0));
+  const grp=(idx,v,key)=>{const m=new Map();for(const i of idx){const k=key(v,i),e=m.get(k)||[0,0];e[0]++;e[1]+=v[i+2];m.set(k,e)}return m};
+  const cust=(idx,v)=>[...grp(idx,v,(v,i)=>v[i])].map(([ci,e])=>({k:I.ck[ci],c:[I.cn[ci],e[0],r2(e[1])]}));
+  const days=(idx,v)=>[...grp(idx,v,(v,i)=>v[i+1])].map(([d,e])=>({o:d,c:[fd(dIso(d)),e[0],r2(e[1])]}));
+  const mons=(idx,v)=>[...grp(idx,v,(v,i)=>dIso(v[i+1]).slice(0,7))].map(([m,e])=>({o:+m.replace("-",""),c:[m,e[0],r2(e[1])]}));
+  const act=rows.filter(r=>!r.st),dbt=r2(act.reduce((s,r)=>s+(r.bal>0?r.bal:0),0));
+  const stop=act.filter(r=>isD(r.li)&&daysSince(r.li)>=30);
+  const nI=ii.length;
+  if(tab==="gen")return {cards:[["إجمالي المبيعات",fm(S)],["إجمالي التحصيلات",fm(C),"ok"],["عدد الفواتير",nI],["إجمالي المديونيات الحالية",fm(dbt),"debt"],["عدد العملاء",act.length],["نشطين (آخر 30 يوم)",act.filter(r=>isD(r.li)&&daysSince(r.li)<30).length],["غير نشطين (30 يوم+)",stop.length]],
+    tables:[{title:"مقارنة المبيعات والتحصيلات",head:["البند","المبلغ"],data:[{c:["المبيعات",S]},{c:["التحصيلات",C]},{c:["الفرق (مبيعات - تحصيلات)",r2(S-C)]}],sort:1,noTot:1,keep:1}]};
+  if(tab==="sales")return {cards:[["إجمالي المبيعات",fm(S)],["عدد الفواتير",nI],["متوسط الفاتورة",nI?fm(S/nI):"—"]],tables:[
+    {title:"المبيعات اليومية",head:["اليوم","الفواتير","المبيعات"],data:days(ii,iv),byO:1},
+    {title:"المبيعات الشهرية",head:["الشهر","الفواتير","المبيعات"],data:mons(ii,iv),byO:1},
+    {title:"أكثر العملاء شراءً",head:["العميل","الفواتير","المشتريات"],data:cust(ii,iv)}]};
+  if(tab==="coll")return {cards:[["إجمالي التحصيلات",fm(C),"ok"],["عدد الدفعات",pi.length]],tables:[
+    {title:"التحصيلات اليومية",head:["اليوم","الدفعات","المبلغ"],data:days(pi,pv),byO:1},
+    {title:"التحصيل حسب العميل (الأكثر سداداً)",head:["العميل","الدفعات","المبلغ"],data:cust(pi,pv)}]};
+  if(tab==="sell"){
+    const m=new Map();for(const i of ii){const s=iv[i+3],e=m.get(s)||[0,0];e[0]++;e[1]+=iv[i+2];m.set(s,e)}
+    return {cards:[["عدد البائعين",m.size],["إجمالي المبيعات",fm(S)]],tables:[{title:"أداء البائعين",head:["البائع","الفواتير","المبيعات","متوسط الفاتورة"],data:[...m].map(([s,e])=>({c:[I.sn[s],e[0],r2(e[1]),r2(e[1]/e[0])]})),sort:2}]};
+  }
+  if(tab==="cust"){
+    const len=B-A+1,pm=new Map(),cm=new Map();
+    for(let i=0;i<iv.length;i+=4){const d=iv[i+1];if(d>=A-len&&d<A)pm.set(iv[i],(pm.get(iv[i])||0)+iv[i+2]);else if(d>=A&&d<=B)cm.set(iv[i],(cm.get(iv[i])||0)+iv[i+2])}
+    const drop=[];for(const [ci,p] of pm){const c=cm.get(ci)||0;if(c<p)drop.push({k:I.ck[ci],c:[I.cn[ci],r2(p),r2(c),r2(p-c)]})}
+    return {cards:[["عملاء اشتروا في الفترة",new Set(ii.map(i=>iv[i])).size],["عملاء انخفضت مشترياتهم",drop.length,"debt"]],tables:[
+      {title:"أعلى العملاء شراءً",head:["العميل","الفواتير","المشتريات"],data:cust(ii,iv)},
+      {title:"العملاء الأعلى مديونية (الرصيد الحالي)",head:["العميل","الرصيد"],data:act.filter(r=>r.bal>0).map(r=>({k:r.k,c:[r.n,r.bal]})),sort:1,keep:1},
+      {title:"العملاء غير النشطين (30 يوم+ بدون شراء)",head:["العميل","أيام بدون شراء","الرصيد"],data:stop.map(r=>({k:r.k,c:[r.n,daysSince(r.li),r.bal??0]})),sort:1,noTot:1,keep:1},
+      {title:"انخفضت مشترياتهم عن الفترة السابقة (بنفس الطول)",head:["العميل","الفترة السابقة","الفترة الحالية","الانخفاض"],data:drop,sort:3}]};
+  }
+  return {cards:[],tables:[]};
+}
+
+/* ---------- واجهة التقارير ---------- */
+const RP={tab:"gen",p:"month",from:"",to:"",sort:"desc",q:""};
+function rpRange(){
+  const t=iso(new Date());
+  if(RP.p==="today")return [t,t];
+  if(RP.p==="prev"){const d=new Date();d.setDate(1);d.setMonth(d.getMonth()-1);const e=new Date(d.getFullYear(),d.getMonth()+1,0);return [iso(d),iso(e)]}
+  if(RP.p==="all")return ["2000-01-01",t];
+  if(RP.p==="custom")return [RP.from||t,RP.to||t];
+  return [t.slice(0,8)+"01",t];
+}
+async function ledgerLoad(){
+  st.led=null;
+  try{const [a,b]=await Promise.all([getDoc(doc(db,"company","rep_inv")),getDoc(doc(db,"company","rep_pay"))]);st.led=a.exists()&&b.exists()?{inv:a.data(),pay:b.data()}:false}catch(e){st.led=false}
+  if(st.tab==="rep")repShow();else if(st.tab==="alert")alShow();
+}
+function tblHtml(T){
+  const col=T.sort??T.head.length-1,dir=RP.sort==="asc"?1:-1;
+  let d=T.data.filter(r=>!RP.q||String(r.c[0]).includes(RP.q));
+  d=[...d].sort((x,y)=>T.byO?dir*(x.o-y.o):dir*(x.c[col]-y.c[col]));
+  const tot=T.head.map((_,i)=>i?r2(d.reduce((s,r)=>s+(+r.c[i]||0),0)):"الإجمالي");
+  st.sheets.push([T.title.slice(0,28),[T.head,...d.map(r=>r.c),...(T.noTot?[]:[tot])]]);
+  const cell=(v,i)=>i?`<td class="n">${typeof v==="number"?fm(v):esc(v)}</td>`:`<td>${esc(v)}</td>`;
+  const sh=d.slice(0,100);
+  return `<h2 class="sec">${esc(T.title)} (${d.length})</h2>${d.length?`<div style="overflow-x:auto"><table class="tbl"><thead><tr>${T.head.map((h,i)=>`<th${i?' class="n"':""}>${esc(h)}</th>`).join("")}</tr></thead><tbody>${sh.map(r=>`<tr${r.k?` data-k="${esc(r.k)}"`:""}>${r.c.map(cell).join("")}</tr>`).join("")}</tbody>${T.noTot?"":`<tfoot><tr>${tot.map(cell).join("")}</tr></tfoot>`}</table></div>${d.length>100?`<div class="mut">معروض أول 100 من ${d.length} (الإجمالي والتصدير لكل النتائج)</div>`:""}`:'<div class="empty">لا توجد بيانات في الفترة دي</div>'}`;
+}
+function repBody(){
+  const L=st.led;
+  if(L===false)return repEmpty();
+  if(!L)return '<div class="empty">جاري التحميل…</div>';
+  if(RP.tab==="ret")return '<div class="warn">تقرير المرتجعات لسه مش شغّال: ملف المرتجعات مش موجود في النظام. هيتفعّل أول ما يتضاف.</div>';
+  const [a,b]=rpRange(),R=repTables(RP.tab,a,b,L,st.rows);st.sheets=[];
+  return `<div class="cards">${R.cards.map(([l,v,c])=>`<div class="card"><small>${l}</small><b class="${c||""}">${v}</b></div>`).join("")}</div>${R.tables.map(tblHtml).join("")}<div class="mut" style="margin-top:10px">آخر تحديث للتقارير: ${new Date(L.inv.at).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}</div>`;
+}
 function repHtml(){
-  const R=st.rep;if(!R)return '<h2 class="sec">التقارير</h2>'+repEmpty();
-  const a=curYM(),b=prevYM(),C=R.months?.[a]||Z,P=R.months?.[b]||Z;
-  const mx=Math.max(1,...C.s.map(x=>x.t));
-  const cmp=(l,x,y,f)=>`<div class="item"><span>${l}<br><span class="mut">الشهر اللي فات: ${f(y)}</span></span><span style="text-align:left"><b class="amt">${f(x)}</b><br>${chg(x,y)}</span></div>`;
-  return `<h2 class="sec">مبيعات ${mlabel(a)}</h2><div class="cards"><div class="card"><small>إجمالي المبيعات</small><b>${fm(C.t)}</b></div><div class="card"><small>عدد الفواتير</small><b>${C.n}</b></div><div class="card"><small>المدفوع</small><b class="ok">${fm(C.p)}</b></div><div class="card"><small>الباقي</small><b class="debt">${fm(C.r)}</b></div></div>
-<h2 class="sec">مقارنة بالشهر اللي فات (${mlabel(b)})</h2><div>${cmp("المبيعات",C.t,P.t,fm)}${cmp("عدد الفواتير",C.n,P.n,String)}${cmp("المدفوع",C.p,P.p,fm)}</div><div class="mut" style="margin-top:6px">الشهر الحالي لسه ماخلصش، فالمقارنة بتبقى أقل في أول الشهر.</div>
-<h2 class="sec">أعلى بائع مبيعات</h2>${C.s.length===1?'<div class="mut">كل الفواتير مسجلة باسم بائع واحد.</div>':""}${C.s.length?`<div>${C.s.map((x,i)=>`<div class="item${i?"":" top"}" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(x.n)}${i?"":' <span class="badge">الأعلى</span>'} <span class="mut">(${x.c} فاتورة)</span></span><b class="amt">${fm(x.t)}</b></div><div class="bar"><i style="width:${Math.round(x.t/mx*100)}%"></i></div></div>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
-<h2 class="sec">أعلى 10 عملاء شراءً الشهر ده</h2>${C.c.length?`<div>${C.c.map(x=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(x.n||nm(x.k))}</span><span class="amt">${fm(x.t)}</span></button>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
-<div class="mut" style="margin-top:10px">آخر تحديث للتقارير: ${new Date(R.at).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}</div>
-<div class="chips"><button class="chip" data-act="xrep">تصدير Excel</button>${isAdmin()?'<button class="chip" data-act="rebuild">تحديث التقارير</button>':""}</div>`;
+  if(st.led===undefined)ledgerLoad();
+  const [a,b]=rpRange(),T=[["gen","العام"],["sales","المبيعات"],["coll","التحصيلات"],["cust","العملاء"],["sell","البائعين"],["ret","المرتجعات"]];
+  const P=[["today","اليوم"],["month","الشهر ده"],["prev","الشهر اللي فات"],["all","كل الفترة"]];
+  return `<div class="noprint"><div class="sub">${T.map(([k,l])=>`<button class="chip" data-rp="tab:${k}" aria-pressed="${RP.tab===k}">${l}</button>`).join("")}</div><div class="sub">${P.map(([k,l])=>`<button class="chip" data-rp="p:${k}" aria-pressed="${RP.p===k}">${l}</button>`).join("")}</div><div class="ctl"><div><label for="rpf">من</label><input type="date" id="rpf" value="${a}"></div><div><label for="rpt">إلى</label><input type="date" id="rpt" value="${b}"></div></div><div class="ctl"><input id="rpq" placeholder="بحث بالاسم" value="${esc(RP.q)}"><button class="chip" data-rp="sort">الترتيب: ${RP.sort==="desc"?"من الأعلى":"من الأقل"}</button></div><div class="chips"><button class="chip" data-rp="print">طباعة</button><button class="chip" data-rp="x">تصدير Excel</button>${isAdmin()?'<button class="chip" data-act="rebuild">تحديث التقارير</button>':""}</div></div><h2 class="sec">${fd(a)} إلى ${fd(b)}</h2><div id="rt">${repBody()}</div>`;
+}
+function repShow(){drawShell(repHtml());repBind()}
+function repBind(){
+  const f=$("#rpf"),t=$("#rpt"),q=$("#rpq");if(!f)return;
+  f.onchange=()=>{if(f.value){RP.from=f.value;RP.to=t.value;RP.p="custom";repShow()}};
+  t.onchange=()=>{if(t.value){RP.from=f.value;RP.to=t.value;RP.p="custom";repShow()}};
+  q.oninput=()=>{RP.q=q.value.trim();$("#rt").innerHTML=repBody()};
+}
+function rpClick(v){
+  const [k,x]=v.split(":");
+  if(k==="print")return window.print();
+  if(k==="x"){if(st.sheets&&st.sheets.length)xport("تقرير-"+RP.tab,st.sheets).catch(()=>alert("تعذّر التصدير"));return}
+  if(k==="tab")RP.tab=x;else if(k==="p")RP.p=x;else if(k==="sort")RP.sort=RP.sort==="desc"?"asc":"desc";
+  repShow();
 }
 const dOk=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||"");
 const byDays=(a,b)=>st.asort==="asc"?a.days-b.days:b.days-a.days;
 function alerts(){
   const act=st.rows.filter(r=>!r.st),cu=st.rep?.cust;
-  const stop=act.filter(r=>dOk(r.li)&&daysSince(r.li)>=30).map(r=>({...r,days:daysSince(r.li)})).sort(byDays);
+  const stop=act.filter(r=>dOk(r.li)&&daysSince(r.li)>=(st.al.days||30)).map(r=>({...r,days:daysSince(r.li)})).sort(byDays);
   const badLi=act.filter(r=>r.li&&!dOk(r.li)).length;
   let late=null,lateNo=[];
   if(cu){
@@ -491,13 +600,45 @@ function alerts(){
   }
   return {stop,late,lateNo,badLi,cu};
 }
+const SV={3:["عاجل","sv3"],2:["مهم","sv2"],1:["عادي","sv1"]};
+function dupList(){
+  const L=st.led;if(!L)return null;
+  const v=L.inv.v,m=new Map(),o=[];
+  for(let i=0;i<v.length;i+=4){const k=v[i]+"|"+v[i+1]+"|"+v[i+2];m.set(k,(m.get(k)||0)+1)}
+  for(const [k,c] of m)if(c>1){const [ci,d,t]=k.split("|").map(Number);o.push({k:L.inv.ck[ci],n:L.inv.cn[ci],d:dIso(d),t,c})}
+  return o.sort((a,b)=>b.d.localeCompare(a.d));
+}
+function fileStatus(){
+  const M=st.meta||{},now=Date.now();
+  return [["balances","المديونيات"],["sales","المبيعات"],["payments","الدفعات"]].map(([k,l])=>{const a=M[k]?.at;return {l,a,d:a?Math.floor((now-a)/864e5):null}});
+}
 function alertHtml(){
-  const {stop,late,lateNo,badLi}=alerts();
-  const row=(x,sub)=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(x.n)}<br><span class="mut">${sub}</span></span><span class="amt ${x.bal>0?"debt":"ok"}">${x.bal==null?"—":fm(x.bal)}</span></button>`;
+  const A=st.al,{stop,late,lateNo}=alerts();
+  if(st.led===undefined)ledgerLoad();
+  const dup=dupList(),top=st.rows.filter(r=>!r.st&&r.bal>0).sort((a,b)=>b.bal-a.bal).slice(0,10);
+  const it=(sv,title,sub,amt,k)=>({sv,h:`<button class="row"${k?` data-k="${esc(k)}"`:""}><span>${esc(title)} <span class="sv ${SV[sv][1]}">${SV[sv][0]}</span><br><span class="mut">${sub}</span></span>${amt==null?"":`<span class="amt ${amt>0?"debt":"ok"}">${fm(amt)}</span>`}</button>`});
+  const D=fileStatus().filter(f=>f.d===null||f.d>=2).map(f=>it(3,f.l,f.a?`آخر تحديث من ${f.d} يوم`:"لم يتم رفعه",null,null));
+  const L1=[...late.map(x=>it(x.days>=60?3:2,x.n,`متأخر في الدفع: آخر دفعة من ${x.days} يوم`,x.bal,x.k)),...lateNo.map(x=>it(2,x.n,"عليه رصيد ولا توجد دفعات مسجلة",x.bal,x.k)),...top.map((x,i)=>it(i<3?3:2,x.n,`من أعلى المديونيات (رقم ${i+1})`,x.bal,x.k))];
+  const I=stop.map(x=>it(x.days>=90?2:1,x.n,`آخر فاتورة ${fd(x.li)} (من ${x.days} يوم)`,x.bal,x.k));
+  const V=dup?dup.map(x=>it(2,x.n,`${x.c} فواتير بنفس المبلغ ${fm(x.t)} يوم ${fd(x.d)} (مشتبه، راجعها)`,null,x.k)):[];
+  const lists={all:[...D,...L1,...I,...V].sort((a,b)=>b.sv-a.sv),debts:L1,idle:I,inv:V,ret:[],data:D};
+  const cnt=k=>k==="inv"&&!dup?"…":lists[k].length;
+  const T=[["all","الكل"],["debts","المديونيات"],["idle","الأقل نشاطاً"],["inv","الفواتير"],["ret","المرتجعات"],["data","تحديث البيانات"]];
   const sortChips=`<div class="chips"><button class="chip" data-asort="desc" aria-pressed="${st.asort==="desc"}">الأعلى أياماً إلى الأقل</button><button class="chip" data-asort="asc" aria-pressed="${st.asort==="asc"}">الأقل أياماً إلى الأعلى</button></div>`;
-  const lateCount=late?late.length+lateNo.length:"—";
-  return `${sortChips}<h2 class="sec">متأخرين في الدفع (${lateCount})</h2><div class="mut">عليهم رصيد ومدفعوش من 30 يوم أو أكتر.</div>${late?`<div style="margin-top:8px">${late.length+lateNo.length?late.map(x=>row(x,`آخر دفعة ${fd(x.pd)} (من ${x.days} يوم)`)).join(""):'<div class="empty">لا يوجد</div>'}</div>${lateNo.length?`<div class="mut" style="margin-top:10px">بدون دفعات مسجلة (عدد الأيام غير معروف، بالأعلى رصيداً)</div><div style="margin-top:6px">${lateNo.map(x=>row(x,"لا توجد دفعات مسجلة")).join("")}</div>`:""}`:repEmpty()}
-<h2 class="sec">وقفوا عن الشراء (${stop.length})</h2><div class="mut">آخر فاتورة ليهم من 30 يوم أو أكتر.</div>${badLi?`<div class="warn">${badLi} عميل تاريخ آخر فاتورة عندهم غير صالح وماظهروش هنا.</div>`:""}<div style="margin-top:8px">${stop.length?stop.map(x=>row(x,`آخر فاتورة ${fd(x.li)} (من ${x.days} يوم)`)).join(""):'<div class="empty">لا يوجد</div>'}</div><div class="chips"><button class="chip" data-act="xalert">تصدير Excel</button></div>`;
+  const dayChips=`<div class="sub">${[30,60,90,120].map(n=>`<button class="chip" data-al="d:${n}" aria-pressed="${A.days===n}">${n} يوم</button>`).join("")}<input type="number" id="ald" min="1" value="${A.days}" style="width:90px" aria-label="عدد الأيام"></div>`;
+  const body=A.tab==="ret"?'<div class="warn">تنبيهات المرتجعات لسه مش شغّالة: ملف المرتجعات مش موجود في النظام.</div>':(lists[A.tab].slice(0,A.tab==="all"?60:400).map(x=>x.h).join("")||'<div class="empty">لا توجد تنبيهات</div>');
+  return `<div class="sub">${T.map(([k,l])=>`<button class="chip" data-al="tab:${k}" aria-pressed="${A.tab===k}">${l} (${cnt(k)})</button>`).join("")}</div>${A.tab==="idle"?dayChips:""}${A.tab==="idle"||A.tab==="debts"?sortChips:""}<div>${body}</div>${A.tab==="all"&&lists.all.length>60?'<div class="mut">معروض أهم 60 تنبيه. باقي التفاصيل في التبويبات.</div>':""}<div class="chips"><button class="chip" data-act="xalert">تصدير Excel</button></div>`;
+}
+function alShow(){drawShell(alertHtml());const e=$("#ald");if(e)e.onchange=()=>{const n=parseInt(e.value);if(n>0){st.al.days=n;alShow()}}}
+function alClick(v){const [k,x]=v.split(":");if(k==="tab")st.al.tab=x;else if(k==="d")st.al.days=+x;alShow()}
+function homeHtml(){
+  const F=fileStatus(),bad=F.filter(f=>f.d===null||f.d>=2),M=st.rep?.months?.[curYM()],{stop,late,lateNo}=alerts();
+  const act=st.rows.filter(r=>!r.st),dbt=r2(act.reduce((s,r)=>s+(r.bal>0?r.bal:0),0));
+  const last=Math.max(0,...F.map(f=>f.a||0));
+  const stat=F.map(f=>`<div class="item"><span>${f.l}</span><span class="${f.d===null||f.d>=2?"debt":"ok"}">${f.a?`${new Date(f.a).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}`:"لم يتم رفعه"}</span></div>`).join("");
+  return `<h2 class="sec">حالة البيانات</h2>${bad.length?`<div class="warn">${bad.map(f=>f.l).join("، ")}: ${bad.some(f=>f.d===null)?"مفيش تحديث مسجل":"آخر تحديث قديم (يومين أو أكتر)"}. ارفع الملفات الجديدة.</div>`:`<div class="okbox">الملفات الثلاثة اتحدّثت خلال آخر يومين. آخر تحديث: ${new Date(last).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}</div>`}<div style="margin-top:8px">${stat}</div>
+<h2 class="sec">ملخص الشهر ده</h2><div class="cards"><div class="card"><small>المبيعات</small><b>${M?fm(M.t):"—"}</b></div><div class="card"><small>التحصيلات</small><b class="ok">${M&&M.co!=null?fm(M.co):"—"}</b></div><div class="card"><small>إجمالي المديونيات</small><b class="debt">${fm(dbt)}</b></div><div class="card"><small>عدد العملاء</small><b>${act.length}</b></div></div>${M?"":'<div class="mut">أرقام الشهر هتظهر بعد ما المدير يدوس "تحديث التقارير" من تبويب التقارير.</div>'}
+<h2 class="sec">تنبيهات سريعة</h2><button class="row" data-tab="alert"><span>متأخرين في الدفع (30 يوم+)</span><span class="amt debt">${late?late.length+lateNo.length:"—"}</span></button><button class="row" data-tab="alert"><span>وقفوا عن الشراء (${st.al.days} يوم+)</span><span class="amt">${stop.length}</span></button>`;
 }
 async function xport(name,sheets){
   await loadXLSX();const wb=XLSX.utils.book_new();
@@ -520,25 +661,28 @@ async function xalert(btn){
 async function buildReports(){
   const [A,B]=await Promise.all([getDocs(collection(db,"company","data","inv")),getDocs(collection(db,"company","data","pay"))]);
   const lim=new Date();lim.setDate(lim.getDate()-90);const l90=iso(lim);
-  const M={},cust={},cc=k=>cust[k]||(cust[k]={t:0,p:""});
-  A.forEach(d=>{const k=d.id;for(const i of d.data().list||[]){
-    if(!i.d)continue;const ym=i.d.slice(0,7),m=M[ym]||(M[ym]={n:0,t:0,p:0,r:0,s:{},c:{}});
+  const M={},cust={},cc=k=>cust[k]||(cust[k]={t:0,p:""}),IV=[],PV=[];
+  A.forEach(d=>{const k=d.id;IV.push({k,n:d.data().n,list:d.data().list||[]});for(const i of d.data().list||[]){
+    if(!i.d)continue;const ym=i.d.slice(0,7),m=M[ym]||(M[ym]={n:0,t:0,p:0,r:0,co:0,s:{},c:{}});
     m.n++;m.t+=i.t||0;m.p+=i.p||0;m.r+=i.r||0;
     const sk=normAr(i.s)||"-",e=m.s[sk]||(m.s[sk]={n:i.s||"بدون اسم",t:0,c:0});e.t+=i.t||0;e.c++;
     const ce=m.c[k]||(m.c[k]={t:0,n:d.data().n||""});ce.t+=i.t||0;
     if(i.d>=l90)cc(k).t+=i.t||0;
   }});
-  B.forEach(d=>{const c=cc(d.id);for(const p of d.data().list||[])if(p.d&&p.d>c.p)c.p=p.d});
+  B.forEach(d=>{const c=cc(d.id);PV.push({k:d.id,n:d.data().n,list:d.data().list||[]});for(const p of d.data().list||[]){if(p.d&&p.d>c.p)c.p=p.d;if(p.d){const m=M[p.d.slice(0,7)]||(M[p.d.slice(0,7)]={n:0,t:0,p:0,r:0,co:0,s:{},c:{}});m.co+=p.a||0}}});
   const months={};
-  Object.keys(M).sort().slice(-13).forEach(ym=>{const m=M[ym];months[ym]={n:m.n,t:r2(m.t),p:r2(m.p),r:r2(m.r),
+  Object.keys(M).sort().slice(-13).forEach(ym=>{const m=M[ym];months[ym]={n:m.n,t:r2(m.t),p:r2(m.p),r:r2(m.r),co:r2(m.co),
     s:Object.values(m.s).sort((a,b)=>b.t-a.t).map(x=>({n:x.n,t:r2(x.t),c:x.c})),
     c:Object.entries(m.c).sort((a,b)=>b[1].t-a[1].t).slice(0,10).map(([k,v])=>({k,n:v.n,t:r2(v.t)}))}});
   for(const k in cust)cust[k].t=r2(cust[k].t);
   await setDoc(doc(db,"company","reports"),{at:Date.now(),months,cust});
+  const led=mkLedger(IV,PV);
+  await setDoc(doc(db,"company","rep_inv"),led.inv);
+  await setDoc(doc(db,"company","rep_pay"),led.pay);
 }
 async function rebuild(btn){
   btn.disabled=true;btn.textContent="جاري الحساب…";
-  try{await buildReports();await loadData();show(st.tab)}catch(e){alert("تعذّر تحديث التقارير");btn.disabled=false;btn.textContent="تحديث التقارير"}
+  try{await buildReports();st.led=undefined;await loadData();show(st.tab)}catch(e){alert("تعذّر تحديث التقارير");btn.disabled=false;btn.textContent="تحديث التقارير"}
 }
 
 /* ---------- شاشة المدير ---------- */
@@ -593,12 +737,13 @@ async function usersInit(){
     const s=await getDocs(collection(db,"users")),u=[];
     s.forEach(d=>u.push({id:d.id,...d.data()}));
     u.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    const by=x=>u.filter(r=>r.status===x),card=(r,btns)=>`<div class="item"><span>${esc(r.name)}<br><span class="mut" dir="ltr">${esc(r.email)}${r.phone?" · "+esc(r.phone):""}</span>${r.status==="approved"?`<br><span class="mut">آخر استخدام: ${r.lastSeen?new Date(r.lastSeen).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"}):"لم يدخل بعد"} · عدد مرات الفتح: ${r.visits||0}</span>`:""}</span><span>${btns}</span></div>`;
+    const by=x=>u.filter(r=>r.status===x),card=(r,btns)=>`<div class="item"><span>${esc(r.name)}${r.role==="admin"?' <span class="badge">مدير</span>':""}<br><span class="mut" dir="ltr">${esc(r.email)}${r.phone?" · "+esc(r.phone):""}</span>${r.status==="approved"?`<br><span class="mut">آخر استخدام: ${r.lastSeen?new Date(r.lastSeen).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"}):"لم يدخل بعد"} · عدد مرات الفتح: ${r.visits||0}</span>`:""}</span><span>${btns}</span></div>`;
     const bt=(id,s2,l,alt)=>`<button class="btn sm${alt?" alt":""}" data-act="ustat" data-uid="${esc(id)}" data-s="${s2}">${l}</button>`;
+    const roleBtn=r=>isRoot()?`<button class="btn sm alt" data-act="urole" data-uid="${esc(r.id)}" data-r="${r.role==="admin"?"user":"admin"}">${r.role==="admin"?"إلغاء المدير":"ترقية لمدير"}</button>`:"";
     const dl=id=>`<button class="btn sm alt del" data-act="udel" data-uid="${esc(id)}">حذف</button>`;
     const sec=(t,arr,f)=>`<h2 class="sec">${t} (${arr.length})</h2>${arr.length?`<div>${arr.map(f).join("")}</div>`:'<div class="mut">لا يوجد</div>'}`;
     box.className="";
-    box.innerHTML=sec("طلبات جديدة",by("pending"),r=>card(r,bt(r.id,"approved","اعتماد")+" "+bt(r.id,"rejected","رفض",1)))+sec("بائعين معتمدين",by("approved"),r=>card(r,bt(r.id,"disabled","إيقاف",1)+" "+dl(r.id)))+sec("موقوفين أو مرفوضين",[...by("disabled"),...by("rejected")],r=>card(r,bt(r.id,"approved","إعادة تفعيل")+" "+dl(r.id)));
+    box.innerHTML=sec("طلبات جديدة",by("pending"),r=>card(r,bt(r.id,"approved","اعتماد")+" "+bt(r.id,"rejected","رفض",1)))+sec("بائعين معتمدين",by("approved"),r=>card(r,(r.role==="admin"&&!isRoot()?"":bt(r.id,"disabled","إيقاف",1)+" "+dl(r.id))+" "+roleBtn(r)))+sec("موقوفين أو مرفوضين",[...by("disabled"),...by("rejected")],r=>card(r,bt(r.id,"approved","إعادة تفعيل")+" "+dl(r.id)));
   }catch(e){box.className="";box.innerHTML=errBox(e)}
 }
 async function setStatus(uid,s,btn){
@@ -607,6 +752,12 @@ async function setStatus(uid,s,btn){
   usersInit();
 }
 
+async function setRole(uid,role,btn){
+  if(!confirm(role==="admin"?"تخلّي البائع ده مدير؟ هيقدر يرفع الملفات ويدير المستخدمين.":"تشيل صلاحية المدير من المستخدم ده؟"))return;
+  btn.disabled=true;
+  try{await setDoc(doc(db,"users",uid),{role},{merge:true})}catch(e){btn.disabled=false;alert("تعذّر التنفيذ. اتأكد إن قواعد Firestore الجديدة اتنشرت");return}
+  usersInit();
+}
 async function delUser(uid,btn){
   if(!confirm("تحذف البائع ده من التطبيق؟"))return;
   btn.disabled=true;
@@ -616,8 +767,10 @@ async function delUser(uid,btn){
 
 /* ---------- الأحداث ---------- */
 app.addEventListener("click",async e=>{
-  const t=e.target.closest("[data-act],[data-k],[data-tab],[data-sort],[data-asort]");if(!t)return;
-  if(t.dataset.asort){const y=scrollY;st.asort=t.dataset.asort;drawShell(alertHtml());return scrollTo(0,y)}
+  const t=e.target.closest("[data-act],[data-k],[data-tab],[data-sort],[data-asort],[data-rp],[data-al]");if(!t)return;
+  if(t.dataset.rp)return rpClick(t.dataset.rp);
+  if(t.dataset.al)return alClick(t.dataset.al);
+  if(t.dataset.asort){const y=scrollY;st.asort=t.dataset.asort;alShow();return scrollTo(0,y)}
   if(t.dataset.tab)return show(t.dataset.tab);
   if(t.dataset.k)return openCustomer(t.dataset.k);
   if(t.dataset.sort){
@@ -627,10 +780,11 @@ app.addEventListener("click",async e=>{
   const a=t.dataset.act;
   if(a==="logout")return signOut(auth);
   if(a==="back")return show(st.tab);
-  if(a==="reload"){t.disabled=true;try{await loadData()}catch(err){}show(st.tab);return}
+  if(a==="reload"){t.disabled=true;st.led=undefined;try{await loadData()}catch(err){}show(st.tab);return}
   if(a==="apply")return onApply(t.dataset.kind,t);
   if(a==="ustat")return setStatus(t.dataset.uid,t.dataset.s,t);
   if(a==="udel")return delUser(t.dataset.uid,t);
+  if(a==="urole")return setRole(t.dataset.uid,t.dataset.r,t);
   if(a==="rebuild")return rebuild(t);
   if(a==="xrep")return xrep(t);
   if(a==="xalert")return xalert(t);
