@@ -70,8 +70,14 @@ nav button[aria-current="true"]{box-shadow:0 2px 0 var(--gold)}
 .bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
 .bar i{display:block;height:100%;background:var(--acc);border-radius:99px}.top .bar i{background:var(--gold)}
 .chg{font-weight:800;font-size:13px}
+.bal{display:inline-block;margin-top:4px;padding:1px 8px;border-radius:8px;background:var(--bg);font-size:12px}
 .btn.del{color:var(--debt)}
 .logo.sm{width:min(100%,120px)}
+.tbl{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+.tbl th,.tbl td{padding:7px 4px;border-bottom:1px solid var(--line);text-align:right}
+.tbl td.n,.tbl th.n{text-align:left;white-space:nowrap}
+.tbl th{color:var(--mut);font-weight:700}
+@media print{header,nav,#pb,.noprint,.back{display:none!important}body{background:#fff;color:#000}.panel{border:0;box-shadow:none}}
 [hidden]{display:none!important}
 </style>
 </head>
@@ -196,10 +202,10 @@ async function planDetail(kind,res){
   const sg=kind==="sales"?(i=>[i.no,i.d,i.t,i.p,i.r,i.s,i.x].join("|")):(i=>[i.d,i.a,i.x].join("|"));
   const byK=new Map();
   for(const it of res.items){if(!byK.has(it.k))byK.set(it.k,{n:it.n,list:[]});byK.get(it.k).list.push(strip(it))}
-  const {min,max}=res.range,inR=d=>d>=min&&d<=max;
-  const ops=[],touched=[],big=[];let added=0,updated=0,removed=0;
+  const inR=()=>true;
+  const ops=[],touched=[],big=[];let added=0,updated=0,removed=0,oldTotal=0;
   for(const k of new Set([...ex.keys(),...byK.keys()])){
-    const old=(ex.get(k)?.list||[]).map(strip),fresh=byK.get(k)?.list||[];
+    const old=(ex.get(k)?.list||[]).map(strip),fresh=byK.get(k)?.list||[];oldTotal+=old.length;
     const nos=new Set(fresh.map(f=>f.no));
     const keep=old.filter(o=>!inR(o.d)&&!(kind==="sales"&&nos.has(o.no)));
     const gone=old.filter(o=>!keep.includes(o));
@@ -220,28 +226,28 @@ async function planDetail(kind,res){
     touched.push({k,n,list:nl});
     ops.push(nl.length?{type:"set",ref:doc(db,"company","data",coll,k),data:{n,list:nl}}:{type:"del",ref:doc(db,"company","data",coll,k)});
   }
-  return {ops,touched,added,updated,removed,big};
+  return {ops,touched,added,updated,removed,big,oldTotal};
 }
 async function makePlan(kind,res){
   const cd=await getDoc(doc(db,"company","customers"));
   const exists=cd.exists(),old=exists?(cd.data().rows||[]):[];
-  const crit=[],lines=[];let ops=[];
+  const crit=[],lines=[];let ops=[],drop=null;
   if(kind==="balances"){
     const om=new Map(old.map(r=>[r.k,r])),nk=new Set(res.items.map(i=>i.k));
     if(old.length>=10&&res.items.length<old.length*0.5)crit.push(`الملف فيه ${res.items.length} عميل بس والمحفوظ ${old.length}. ممكن الملف ناقص`);
     const rows=res.items.map(i=>{const o=om.get(i.k)||{};return {k:i.k,n:i.n,ph:i.ph,mb:i.mb,bal:i.bal,li:o.li||"",lt:o.lt??null,lp:o.lp??null,lr:o.lr??null}});
     const gone=old.filter(o=>!nk.has(o.k));
-    lines.push(`عملاء في الملف: ${res.items.length}`,`عملاء جدد: ${res.items.filter(i=>!om.has(i.k)).length}`,`أرصدة اتغيّرت: ${res.items.filter(i=>om.has(i.k)&&om.get(i.k).bal!==i.bal).length}`,`عملاء هيتمسحوا من التطبيق مع فواتيرهم ودفعاتهم (مش في الملف): ${gone.length}${gone.length?` (مثال: ${gone.slice(0,3).map(g=>g.n).join("، ")})`:""}`);
+    lines.push(`عملاء في الملف: ${res.items.length}`,`عملاء جدد: ${res.items.filter(i=>!om.has(i.k)).length}`,`أرصدة اتغيّرت: ${res.items.filter(i=>om.has(i.k)&&om.get(i.k).bal!==i.bal).length}`,`عملاء هيتشالوا من القايمة بس وتاريخهم هيفضل محفوظ (مش في الملف): ${gone.length}${gone.length?` (مثال: ${gone.slice(0,3).map(g=>g.n).join("، ")})`:""}`);
     if(old.length)ops.push({type:"set",ref:doc(db,"admin","backup_customers"),data:{rows:old,at:Date.now()}});
     ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows}});
-    for(const g of gone)ops.push({type:"del",ref:doc(db,"company","data","inv",g.k)},{type:"del",ref:doc(db,"company","data","pay",g.k)});
   }else{
     if(!exists)crit.push("ارفع ملف المديونيات الأول");
     const p=await planDetail(kind,res);
     if(p.big.length)crit.push(`عميل واحد أو أكتر عنده بيانات كتير زيادة عن الحد (مثال: ${p.big.slice(0,3).join("، ")}). ارفع فترة أقصر`);
-    lines.push(`الفترة: ${fd(res.range.min)} إلى ${fd(res.range.max)} (الفترة دي بس هي اللي هتتحدّث)`,`جديد: ${p.added}`);
+    lines.push(`الملف هيحل محل كل المحفوظ في التطبيق (التطبيق = نفس الملف بالظبط). فترة الملف: ${fd(res.range.min)} إلى ${fd(res.range.max)}`,`جديد: ${p.added}`);
+    if(p.oldTotal>20&&p.removed>p.oldTotal*0.5)drop={r:p.removed,t:p.oldTotal};
     if(kind==="sales")lines.push(`معدّل: ${p.updated}`);
-    lines.push(`اتشال من الفترة (مش في الملف): ${p.removed}`);
+    lines.push(`هيتشال من التطبيق (مش في الملف): ${p.removed} من ${p.oldTotal} محفوظ`);
     ops=p.ops;
     const known=new Set(old.map(r=>r.k)),unk=[...new Set(res.items.filter(i=>!known.has(i.k)).map(i=>i.n))];
     if(unk.length)lines.push(`تنبيه: ${unk.length} عميل مش موجودين في المديونيات (مثال: ${unk.slice(0,3).join("، ")})`);
@@ -255,7 +261,7 @@ async function makePlan(kind,res){
       ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows}});
     }
   }
-  return {crit,lines,ops};
+  return {crit,lines,ops,drop};
 }
 async function runBatches(ops){
   for(let i=0;i<ops.length;i+=400){
@@ -268,6 +274,7 @@ async function commit(kind,res,fileName){
   if(res.critical.length)throw new Error(res.critical.join("؛ "));
   const plan=await makePlan(kind,res);
   if(plan.crit.length)throw new Error(plan.crit.join("؛ "));
+  if(plan.drop&&!confirm(`الملف ده هيمسح ${plan.drop.r} من ${plan.drop.t} سجل محفوظ في التطبيق. متأكد إن الملف كامل؟`))throw new Error("اتلغى الاستيراد، مفيش حاجة اتغيّرت");
   await runBatches(plan.ops);
   await setDoc(doc(db,"company","meta"),{[kind]:{at:Date.now(),file:fileName}},{merge:true});
   await addDoc(collection(db,"admin","data","imports"),{at:Date.now(),by:st.user.uid,kind,file:fileName,rows:res.items.length,range:res.range?`${res.range.min}..${res.range.max}`:"",lines:plan.lines,warnings:res.warnings});
@@ -275,7 +282,7 @@ async function commit(kind,res,fileName){
 }
 
 /* ---------- الحالة والعرض ---------- */
-const st={user:null,rows:null,rep:null,meta:{},q:"",sort:"name",debtOnly:false,tab:"list",logs:null,me:null,pending:0,signingUp:false,unsub:null};
+const st={user:null,rows:null,rep:null,asort:"desc",meta:{},q:"",sort:"name",debtOnly:false,tab:"list",logs:null,me:null,pending:0,signingUp:false,unsub:null};
 const pending={};
 const app=document.getElementById("app");
 const isAdmin=()=>st.user&&st.user.uid===ADMIN_UID;
@@ -301,6 +308,7 @@ async function boot(){
       await setDoc(doc(db,"users",st.user.uid),rec);st.me=rec;
     }
     if(st.me.status!=="approved"){showGate();return}
+    setDoc(doc(db,"users",st.user.uid),{lastSeen:Date.now(),visits:(st.me.visits||0)+1},{merge:true}).catch(()=>{});
     if(!ld)await loadData();
     show("list");
   }catch(e){drawShell(errBox(e))}
@@ -391,9 +399,43 @@ function idleHtml(){
   const r=st.rows.filter(x=>!x.st).sort((a,b)=>{if(!a.li&&!b.li)return a.n.localeCompare(b.n,"ar");if(!a.li)return -1;if(!b.li)return 1;return a.li.localeCompare(b.li)});
   return `<h2 class="sec">العملاء من الأقل نشاطاً للأكثر</h2><div class="mut">بحسب تاريخ آخر فاتورة في الفواتير المحفوظة فقط.</div><div style="margin-top:8px">${r.length?r.map(x=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(x.n)}<br><span class="mut">${x.li?`آخر فاتورة ${fd(x.li)} (من ${daysSince(x.li)} يوم)`:"لم يشتر خلال الفترة المحفوظة"}</span></span><span class="amt ${x.bal>0?"debt":"ok"}">${x.bal==null?"—":fm(x.bal)}</span></button>`).join(""):'<div class="empty">لا توجد بيانات</div>'}</div>`;
 }
+/* ---------- كشف الحساب ---------- */
+function stmtCalc(bal,inv,pay,from,to){
+  const mv=[];
+  inv.forEach(r=>mv.push({d:r.d,o:0,no:r.no,l:"فاتورة بيع رقم "+r.no,dr:r.t,cr:0}));
+  pay.forEach(r=>mv.push({d:r.d,o:1,no:"",l:"تحصيل"+(r.x?" - "+r.x:""),dr:0,cr:r.a}));
+  mv.sort((a,b)=>a.d.localeCompare(b.d)||a.o-b.o||((parseFloat(a.no)-parseFloat(b.no))||0));
+  const net=a=>a.reduce((s,m)=>s+m.dr-m.cr,0);
+  const open=r2(bal-net(mv.filter(m=>m.d>=from)));
+  let run=open;
+  const rows=mv.filter(m=>m.d>=from&&m.d<=to).map(m=>{run=r2(run+m.dr-m.cr);return {...m,bal:run}});
+  return {open,rows,close:run,dr:r2(rows.reduce((s,m)=>s+m.dr,0)),cr:r2(rows.reduce((s,m)=>s+m.cr,0))};
+}
+function stmtView(c,inv,pay){
+  const today=iso(new Date()),all=[...inv,...pay].map(x=>x.d).sort(),minD=all[0]||"";
+  drawShell(`<div class="noprint"><button class="back" id="sbk">‹ رجوع</button></div><div class="panel noprint"><label for="sf">من تاريخ</label><input type="date" id="sf" value="${today.slice(0,8)}01"><label for="se">إلى تاريخ</label><input type="date" id="se" value="${today}"><div class="chips"><button class="chip" id="sp">طباعة</button><button class="chip" id="sx">تصدير Excel</button></div></div><div class="panel" id="sr"></div>`);
+  let cur=null;
+  const out=()=>{
+    const f=$("#sf").value,t=$("#se").value,box=$("#sr");cur=null;
+    if(!f||!t||f>t){box.innerHTML='<div class="warn">اختار فترة صحيحة</div>';return}
+    if(c.bal==null){box.innerHTML='<div class="warn">مفيش رصيد حالي للعميل، مش هقدر أحسب الكشف.</div>';return}
+    const R=stmtCalc(c.bal,inv,pay,f,t);cur={R,f,t};
+    box.innerHTML=`<div style="text-align:center"><b>الحاج سلامة للمجمدات</b><br>كشف حساب: ${esc(c.n)}<br><span class="mut">من ${fd(f)} إلى ${fd(t)}</span></div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>التاريخ</th><th>البيان</th><th class="n">مدين</th><th class="n">دائن</th><th class="n">الرصيد</th></tr></thead><tbody><tr><td>${fd(f)}</td><td>رصيد أول المدة</td><td></td><td></td><td class="n"><b>${fm(R.open)}</b></td></tr>${R.rows.map(m=>`<tr><td>${fd(m.d)}</td><td>${esc(m.l)}</td><td class="n">${m.dr?fm(m.dr):""}</td><td class="n">${m.cr?fm(m.cr):""}</td><td class="n">${fm(m.bal)}</td></tr>`).join("")}<tr><td>${fd(t)}</td><td><b>رصيد آخر المدة</b></td><td class="n">${fm(R.dr)}</td><td class="n">${fm(R.cr)}</td><td class="n"><b>${fm(R.close)}</b></td></tr></tbody></table></div><div class="mut" style="margin-top:10px">المرتجعات مش محسوبة في الكشف لسه. الأرصدة محسوبة رجوعاً من رصيد آخر ملف مديونيات (آخر تحديث: ${esc(updated())}).${minD&&f<minD?` أول حركة محفوظة بتاريخ ${fd(minD)}، فرصيد أول المدة قبلها محسوب مش مؤكد.`:""}</div>`;
+  };
+  $("#sf").onchange=out;$("#se").onchange=out;
+  $("#sbk").onclick=()=>openCustomer(c.k);
+  $("#sp").onclick=()=>window.print();
+  $("#sx").onclick=async e=>{
+    if(!cur)return;const b=e.currentTarget,{R,f,t}=cur;b.disabled=true;
+    try{await xport("كشف-حساب-"+c.n.replace(/[\\\/:*?"<>|]/g,"").slice(0,25),[["الكشف",[["العميل",c.n],["من",f],["إلى",t],[],["التاريخ","البيان","مدين","دائن","الرصيد"],[f,"رصيد أول المدة","","",R.open],...R.rows.map(m=>[m.d,m.l,m.dr||"",m.cr||"",m.bal]),[t,"رصيد آخر المدة",R.dr,R.cr,R.close]]]])}catch(err){alert("تعذّر التصدير")}
+    b.disabled=false;
+  };
+  out();scrollTo(0,0);
+}
+
 async function openCustomer(k){
   const c=st.rows.find(r=>r.k===k);if(!c)return;
-  const head=`<button class="back" data-act="back">‹ رجوع</button><div class="panel"><div class="mut">${esc(c.n)}${c.st?' <span class="badge">مش في آخر ملف مديونيات</span>':""}</div><div class="big ${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</div><div class="mut">الرصيد الحالي${c.bal<0?" (له رصيد عندنا)":""}</div>${[c.ph,c.mb].filter(Boolean).map(p=>`<div style="margin-top:6px"><a href="tel:${esc(p)}">اتصال ${esc(p)}</a></div>`).join("")}</div>`;
+  const head=`<button class="back" data-act="back">‹ رجوع</button><div class="panel"><div class="mut">${esc(c.n)}${c.st?' <span class="badge">مش في آخر ملف مديونيات</span>':""}</div><div class="big ${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</div><div class="mut">رصيد حساب العميل الحالي${c.bal<0?" (له رصيد عندنا)":""}</div>${[c.ph,c.mb].filter(Boolean).map(p=>`<div style="margin-top:6px"><a href="tel:${esc(p)}">اتصال ${esc(p)}</a></div>`).join("")}</div>`;
   drawShell(head+'<div id="dd" class="empty">جاري التحميل…</div>');
   let inv=[],pay=[];
   try{
@@ -403,8 +445,9 @@ async function openCustomer(k){
   const last=inv[0];let tab="s";
   const draw=()=>{
     $("#dd").className="";
-    $("#dd").innerHTML=`<div class="panel"><div class="mut">آخر فاتورة</div>${last?`<div style="font-weight:800">${fm(last.t)} بتاريخ ${fd(last.d)}</div><div class="mut">رقم ${esc(last.no)} · مدفوع ${fm(last.p)} · باقي ${fm(last.r)}</div>`:'<div class="mut">لا توجد فواتير في الفترة المحفوظة</div>'}</div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?(inv.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">رقم ${esc(r.no)}${r.s?" · "+esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></span><span style="text-align:left"><b>${fm(r.t)}</b><br><span class="mut">مدفوع ${fm(r.p)} · باقي ${fm(r.r)}</span></span></div>`).join("")||'<div class="empty">لا توجد فواتير</div>'):(pay.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">${esc(r.x||"")}</span></span><b class="ok">${fm(r.a)}</b></div>`).join("")||'<div class="empty">لا توجد دفعات</div>')}</div>`;
+    $("#dd").innerHTML=`<div class="panel"><div class="mut">آخر فاتورة</div>${last?`<div style="font-weight:800">${fm(last.t)} بتاريخ ${fd(last.d)}</div><div class="mut">رقم ${esc(last.no)} · مدفوع ${fm(last.p)} · متبقي من الفاتورة ${fm(last.r)}</div>`:'<div class="mut">لا توجد فواتير في الفترة المحفوظة</div>'}</div><div class="chips"><button class="chip" id="stb">كشف حساب</button></div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?(inv.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">رقم ${esc(r.no)}${r.s?" · "+esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></span><span style="text-align:left"><span class="mut">قيمة الفاتورة</span> <b>${fm(r.t)}</b><br><span class="mut">مدفوع ${fm(r.p)} · متبقي من الفاتورة ${fm(r.r)}</span><br><span class="bal">رصيد حساب العميل الحالي: <b class="${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</b></span></span></div>`).join("")||'<div class="empty">لا توجد فواتير</div>'):(pay.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">${esc(r.x||"")}</span></span><b class="ok">${fm(r.a)}</b></div>`).join("")||'<div class="empty">لا توجد دفعات</div>')}</div>`;
     $("#dd").querySelector(".tabs").onclick=e=>{const b=e.target.closest("[data-t]");if(b){tab=b.dataset.t;draw()}};
+    $("#stb").onclick=()=>stmtView(c,inv,pay);
   };
   draw();scrollTo(0,0);
 }
@@ -424,22 +467,37 @@ function repHtml(){
   const cmp=(l,x,y,f)=>`<div class="item"><span>${l}<br><span class="mut">الشهر اللي فات: ${f(y)}</span></span><span style="text-align:left"><b class="amt">${f(x)}</b><br>${chg(x,y)}</span></div>`;
   return `<h2 class="sec">مبيعات ${mlabel(a)}</h2><div class="cards"><div class="card"><small>إجمالي المبيعات</small><b>${fm(C.t)}</b></div><div class="card"><small>عدد الفواتير</small><b>${C.n}</b></div><div class="card"><small>المدفوع</small><b class="ok">${fm(C.p)}</b></div><div class="card"><small>الباقي</small><b class="debt">${fm(C.r)}</b></div></div>
 <h2 class="sec">مقارنة بالشهر اللي فات (${mlabel(b)})</h2><div>${cmp("المبيعات",C.t,P.t,fm)}${cmp("عدد الفواتير",C.n,P.n,String)}${cmp("المدفوع",C.p,P.p,fm)}</div><div class="mut" style="margin-top:6px">الشهر الحالي لسه ماخلصش، فالمقارنة بتبقى أقل في أول الشهر.</div>
-<h2 class="sec">أعلى بائع مبيعات</h2>${C.s.length?`<div>${C.s.map((x,i)=>`<div class="item${i?"":" top"}" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(x.n)}${i?"":' <span class="badge">الأعلى</span>'} <span class="mut">(${x.c} فاتورة)</span></span><b class="amt">${fm(x.t)}</b></div><div class="bar"><i style="width:${Math.round(x.t/mx*100)}%"></i></div></div>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
-<h2 class="sec">أعلى 10 عملاء شراءً الشهر ده</h2>${C.c.length?`<div>${C.c.map(x=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(nm(x.k))}</span><span class="amt">${fm(x.t)}</span></button>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
+<h2 class="sec">أعلى بائع مبيعات</h2>${C.s.length===1?'<div class="mut">كل الفواتير مسجلة باسم بائع واحد.</div>':""}${C.s.length?`<div>${C.s.map((x,i)=>`<div class="item${i?"":" top"}" style="display:block"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(x.n)}${i?"":' <span class="badge">الأعلى</span>'} <span class="mut">(${x.c} فاتورة)</span></span><b class="amt">${fm(x.t)}</b></div><div class="bar"><i style="width:${Math.round(x.t/mx*100)}%"></i></div></div>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
+<h2 class="sec">أعلى 10 عملاء شراءً الشهر ده</h2>${C.c.length?`<div>${C.c.map(x=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(x.n||nm(x.k))}</span><span class="amt">${fm(x.t)}</span></button>`).join("")}</div>`:'<div class="empty">لا مبيعات الشهر ده</div>'}
 <div class="mut" style="margin-top:10px">آخر تحديث للتقارير: ${new Date(R.at).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}</div>
 <div class="chips"><button class="chip" data-act="xrep">تصدير Excel</button>${isAdmin()?'<button class="chip" data-act="rebuild">تحديث التقارير</button>':""}</div>`;
 }
+const dOk=s=>/^\d{4}-\d{2}-\d{2}$/.test(s||"");
+const byDays=(a,b)=>st.asort==="asc"?a.days-b.days:b.days-a.days;
 function alerts(){
   const act=st.rows.filter(r=>!r.st),cu=st.rep?.cust;
-  const stop=act.filter(r=>r.li&&daysSince(r.li)>=30).sort((a,b)=>b.li.localeCompare(a.li));
-  const late=cu?act.filter(r=>{if(!(r.bal>0))return false;const p=cu[r.k]?.p;return p?daysSince(p)>=30:(r.li&&daysSince(r.li)>=30)}).sort((a,b)=>b.bal-a.bal):null;
-  return {stop,late,cu};
+  const stop=act.filter(r=>dOk(r.li)&&daysSince(r.li)>=30).map(r=>({...r,days:daysSince(r.li)})).sort(byDays);
+  const badLi=act.filter(r=>r.li&&!dOk(r.li)).length;
+  let late=null,lateNo=[];
+  if(cu){
+    late=[];
+    for(const r of act){
+      if(!(r.bal>0))continue;
+      const p=cu[r.k]?.p;
+      if(dOk(p)){const d=daysSince(p);if(d>=30)late.push({...r,days:d,pd:p})}
+      else if(dOk(r.li)&&daysSince(r.li)>=30)lateNo.push(r);
+    }
+    late.sort(byDays);lateNo.sort((a,b)=>b.bal-a.bal);
+  }
+  return {stop,late,lateNo,badLi,cu};
 }
 function alertHtml(){
-  const {stop,late,cu}=alerts();
+  const {stop,late,lateNo,badLi}=alerts();
   const row=(x,sub)=>`<button class="row" data-k="${esc(x.k)}"><span>${esc(x.n)}<br><span class="mut">${sub}</span></span><span class="amt ${x.bal>0?"debt":"ok"}">${x.bal==null?"—":fm(x.bal)}</span></button>`;
-  return `<h2 class="sec">متأخرين في الدفع (${late?late.length:"—"})</h2><div class="mut">عليهم رصيد ومدفعوش من 30 يوم أو أكتر.</div>${late?`<div style="margin-top:8px">${late.length?late.map(x=>{const p=cu[x.k]?.p;return row(x,p?`آخر دفعة من ${daysSince(p)} يوم`:"لا توجد دفعات مسجلة")}).join(""):'<div class="empty">لا يوجد</div>'}</div>`:repEmpty()}
-<h2 class="sec">وقفوا عن الشراء (${stop.length})</h2><div class="mut">آخر فاتورة ليهم من 30 يوم أو أكتر.</div><div style="margin-top:8px">${stop.length?stop.map(x=>row(x,`آخر فاتورة ${fd(x.li)} (من ${daysSince(x.li)} يوم)`)).join(""):'<div class="empty">لا يوجد</div>'}</div><div class="chips"><button class="chip" data-act="xalert">تصدير Excel</button></div>`;
+  const sortChips=`<div class="chips"><button class="chip" data-asort="desc" aria-pressed="${st.asort==="desc"}">الأعلى أياماً إلى الأقل</button><button class="chip" data-asort="asc" aria-pressed="${st.asort==="asc"}">الأقل أياماً إلى الأعلى</button></div>`;
+  const lateCount=late?late.length+lateNo.length:"—";
+  return `${sortChips}<h2 class="sec">متأخرين في الدفع (${lateCount})</h2><div class="mut">عليهم رصيد ومدفعوش من 30 يوم أو أكتر.</div>${late?`<div style="margin-top:8px">${late.length+lateNo.length?late.map(x=>row(x,`آخر دفعة ${fd(x.pd)} (من ${x.days} يوم)`)).join(""):'<div class="empty">لا يوجد</div>'}</div>${lateNo.length?`<div class="mut" style="margin-top:10px">بدون دفعات مسجلة (عدد الأيام غير معروف، بالأعلى رصيداً)</div><div style="margin-top:6px">${lateNo.map(x=>row(x,"لا توجد دفعات مسجلة")).join("")}</div>`:""}`:repEmpty()}
+<h2 class="sec">وقفوا عن الشراء (${stop.length})</h2><div class="mut">آخر فاتورة ليهم من 30 يوم أو أكتر.</div>${badLi?`<div class="warn">${badLi} عميل تاريخ آخر فاتورة عندهم غير صالح وماظهروش هنا.</div>`:""}<div style="margin-top:8px">${stop.length?stop.map(x=>row(x,`آخر فاتورة ${fd(x.li)} (من ${x.days} يوم)`)).join(""):'<div class="empty">لا يوجد</div>'}</div><div class="chips"><button class="chip" data-act="xalert">تصدير Excel</button></div>`;
 }
 async function xport(name,sheets){
   await loadXLSX();const wb=XLSX.utils.book_new();
@@ -454,9 +512,9 @@ async function xrep(btn){
   btn.disabled=false;
 }
 async function xalert(btn){
-  const {stop,late,cu}=alerts();btn.disabled=true;
+  const {stop,late,lateNo}=alerts();btn.disabled=true;
   const ph=x=>[x.ph,x.mb].filter(Boolean).join(" / ");
-  try{await xport("التنبيهات",[["متأخرين في الدفع",[["العميل","الرصيد","آخر دفعة","التليفون"],...(late||[]).map(x=>[x.n,x.bal,fd(cu[x.k]?.p),ph(x)])]],["وقفوا عن الشراء",[["العميل","الرصيد","آخر فاتورة","التليفون"],...stop.map(x=>[x.n,x.bal??"",fd(x.li),ph(x)])]]])}catch(e){alert("تعذّر التصدير")}
+  try{await xport("التنبيهات",[["متأخرين في الدفع",[["العميل","الرصيد","آخر دفعة","عدد الأيام","التليفون"],...(late||[]).map(x=>[x.n,x.bal,fd(x.pd),x.days,ph(x)]),...lateNo.map(x=>[x.n,x.bal,"لا توجد دفعات مسجلة","",ph(x)])]],["وقفوا عن الشراء",[["العميل","الرصيد","آخر فاتورة","عدد الأيام","التليفون"],...stop.map(x=>[x.n,x.bal??"",fd(x.li),x.days,ph(x)])]]])}catch(e){alert("تعذّر التصدير")}
   btn.disabled=false;
 }
 async function buildReports(){
@@ -467,14 +525,14 @@ async function buildReports(){
     if(!i.d)continue;const ym=i.d.slice(0,7),m=M[ym]||(M[ym]={n:0,t:0,p:0,r:0,s:{},c:{}});
     m.n++;m.t+=i.t||0;m.p+=i.p||0;m.r+=i.r||0;
     const sk=normAr(i.s)||"-",e=m.s[sk]||(m.s[sk]={n:i.s||"بدون اسم",t:0,c:0});e.t+=i.t||0;e.c++;
-    m.c[k]=(m.c[k]||0)+(i.t||0);
+    const ce=m.c[k]||(m.c[k]={t:0,n:d.data().n||""});ce.t+=i.t||0;
     if(i.d>=l90)cc(k).t+=i.t||0;
   }});
   B.forEach(d=>{const c=cc(d.id);for(const p of d.data().list||[])if(p.d&&p.d>c.p)c.p=p.d});
   const months={};
   Object.keys(M).sort().slice(-13).forEach(ym=>{const m=M[ym];months[ym]={n:m.n,t:r2(m.t),p:r2(m.p),r:r2(m.r),
     s:Object.values(m.s).sort((a,b)=>b.t-a.t).map(x=>({n:x.n,t:r2(x.t),c:x.c})),
-    c:Object.entries(m.c).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k,t])=>({k,t:r2(t)}))}});
+    c:Object.entries(m.c).sort((a,b)=>b[1].t-a[1].t).slice(0,10).map(([k,v])=>({k,n:v.n,t:r2(v.t)}))}});
   for(const k in cust)cust[k].t=r2(cust[k].t);
   await setDoc(doc(db,"company","reports"),{at:Date.now(),months,cust});
 }
@@ -535,7 +593,7 @@ async function usersInit(){
     const s=await getDocs(collection(db,"users")),u=[];
     s.forEach(d=>u.push({id:d.id,...d.data()}));
     u.sort((a,b)=>(b.createdAt||0)-(a.createdAt||0));
-    const by=x=>u.filter(r=>r.status===x),card=(r,btns)=>`<div class="item"><span>${esc(r.name)}<br><span class="mut" dir="ltr">${esc(r.email)}${r.phone?" · "+esc(r.phone):""}</span></span><span>${btns}</span></div>`;
+    const by=x=>u.filter(r=>r.status===x),card=(r,btns)=>`<div class="item"><span>${esc(r.name)}<br><span class="mut" dir="ltr">${esc(r.email)}${r.phone?" · "+esc(r.phone):""}</span>${r.status==="approved"?`<br><span class="mut">آخر استخدام: ${r.lastSeen?new Date(r.lastSeen).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"}):"لم يدخل بعد"} · عدد مرات الفتح: ${r.visits||0}</span>`:""}</span><span>${btns}</span></div>`;
     const bt=(id,s2,l,alt)=>`<button class="btn sm${alt?" alt":""}" data-act="ustat" data-uid="${esc(id)}" data-s="${s2}">${l}</button>`;
     const dl=id=>`<button class="btn sm alt del" data-act="udel" data-uid="${esc(id)}">حذف</button>`;
     const sec=(t,arr,f)=>`<h2 class="sec">${t} (${arr.length})</h2>${arr.length?`<div>${arr.map(f).join("")}</div>`:'<div class="mut">لا يوجد</div>'}`;
@@ -558,7 +616,8 @@ async function delUser(uid,btn){
 
 /* ---------- الأحداث ---------- */
 app.addEventListener("click",async e=>{
-  const t=e.target.closest("[data-act],[data-k],[data-tab],[data-sort]");if(!t)return;
+  const t=e.target.closest("[data-act],[data-k],[data-tab],[data-sort],[data-asort]");if(!t)return;
+  if(t.dataset.asort){const y=scrollY;st.asort=t.dataset.asort;drawShell(alertHtml());return scrollTo(0,y)}
   if(t.dataset.tab)return show(t.dataset.tab);
   if(t.dataset.k)return openCustomer(t.dataset.k);
   if(t.dataset.sort){
