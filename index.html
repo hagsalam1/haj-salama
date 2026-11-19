@@ -84,6 +84,10 @@ nav button[aria-current="true"]{box-shadow:0 2px 0 var(--gold)}
 .sv3{background:rgba(180,35,24,.15);color:var(--debt)}.sv2{background:rgba(201,162,39,.22);color:var(--gold)}.sv1{background:var(--bg);color:var(--mut)}
 tr[data-k]{cursor:pointer}tr[data-k]:active{background:var(--bg)}
 .tbl tfoot td{font-weight:800;border-top:2px solid var(--line)}
+.day{margin:12px 0}.dh{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.iv{border-top:1px dashed var(--line);padding:10px 0}.ivh{display:flex;justify-content:space-between;gap:8px;margin-bottom:8px;font-weight:700}
+.i3{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center}.i3 small{display:block;color:var(--mut);font-size:12px}.i3 b{font-size:16px}
+.df{margin-top:6px;padding:10px;background:var(--bg);border-radius:10px;font-size:13px;line-height:1.9}
 .ctl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0}
 .ctl label{font-size:12px;color:var(--mut)}
 .okbox{background:rgba(26,127,55,.12);border:1px solid rgba(26,127,55,.35);color:var(--ok);padding:10px 12px;border-radius:12px;margin-top:10px}
@@ -114,8 +118,20 @@ const num=v=>{if(typeof v==="number")return v;const t=normAr(v).replace(/[,\s]/g
 const r2=v=>Math.round(v*100)/100;
 const iso=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 const mk=(y,m,d)=>{if(m<1||m>12||d<1||d>31)return null;const t=new Date(Date.UTC(y,m-1,d));if(t.getUTCMonth()!==m-1)return null;return `${y}-${String(m).padStart(2,"0")}-${String(d).padStart(2,"0")}`};
+const serialIso=n=>{const d=new Date(Date.UTC(1899,11,30)+Math.floor(n)*864e5);return mk(d.getUTCFullYear(),d.getUTCMonth()+1,d.getUTCDate())};
+function dateOrder(vals,def){
+  let dm=0,md=0,amb=0,ex="";
+  for(const v of vals){const t=normAr(v),m=t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);if(!m)continue;const a=+m[1],b=+m[2];if(a>12&&b<=12)dm++;else if(b>12&&a<=12)md++;else{amb++;if(!ex)ex=t.split(/\s/)[0]}}
+  if(dm&&md)return {mode:null,mixed:true};
+  if(dm)return {mode:"dmy"};
+  if(md)return {mode:"mdy"};
+  return amb?{mode:def,ambiguous:true,ex}:{mode:def};
+}
 function parseDate(v,mode){
+  if(v instanceof Date&&!isNaN(v))return mk(v.getFullYear(),v.getMonth()+1,v.getDate());
+  if(typeof v==="number"&&v>20000&&v<80000)return serialIso(v);
   const t=normAr(v);let m;
+  if(/^\d{5}(\.\d+)?$/.test(t)&&+t>20000&&+t<80000)return serialIso(+t);
   if((m=t.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/)))return mk(+m[1],+m[2],+m[3]);
   if((m=t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/))){
     const a=+m[1],b=+m[2],y=+m[3];let mo,d;
@@ -144,9 +160,25 @@ function loadXLSX(){
 async function readSheet(file){
   await loadXLSX();
   const buf=await file.arrayBuffer();
-  const wb=XLSX.read(buf,{type:"array",cellDates:true,dateNF:"yyyy-mm-dd"});
-  const ws=wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws,{header:1,raw:false,dateNF:"yyyy-mm-dd",defval:""});
+  const wb=XLSX.read(buf,{type:"array",cellDates:false,cellNF:true});
+  return sheetToRows(wb.Sheets[wb.SheetNames[0]]);
+}
+function sheetToRows(ws){
+  const rg=XLSX.utils.decode_range(ws["!ref"]||"A1"),rows=[];
+  for(let R=rg.s.r;R<=rg.e.r;R++){
+    const row=[];
+    for(let C=rg.s.c;C<=rg.e.c;C++){
+      const c=ws[XLSX.utils.encode_cell({r:R,c:C})];let v="";
+      if(c){
+        if(c.t==="n"&&c.z&&XLSX.SSF.is_date(c.z)){const p=XLSX.SSF.parse_date_code(c.v);v=`${p.y}-${String(p.m).padStart(2,"0")}-${String(p.d).padStart(2,"0")}`}
+        else if(c.t==="n")v=c.v;
+        else v=c.w??c.v??"";
+      }
+      row.push(v);
+    }
+    rows.push(row);
+  }
+  return rows;
 }
 function headerMap(rows,kind){
   const sc=SCHEMA[kind];let hi=-1;
@@ -163,7 +195,12 @@ function parseSheet(kind,rows){
   const out={kind,critical:[],warnings:[],items:[],skipped:0,range:null};
   const hm=headerMap(rows,kind);
   if(hm.err){out.critical.push(hm.err+(hm.seen?` (الأعمدة الموجودة: ${hm.seen.join(" | ")})`:""));return out}
-  const {hi,col}=hm,errs=[],seen=new Map();let total=0,dupes=0,mism=0,dupNames=[];
+  const {hi,col}=hm,errs=[],seen=new Map(),grp=new Set(),noCust=new Map();let total=0,dupes=0,mism=0,conf=0,dupNames=[];
+  let ord={mode:"mdy"};
+  if(kind!=="balances"){
+    ord=dateOrder(rows.slice(hi+1).map(r=>r[col.date]),"mdy");
+    if(ord.mixed){out.critical.push("التواريخ في الملف مختلطة: بعضها يوم/شهر وبعضها شهر/يوم. صدّر الملف تاني بتنسيق تاريخ واحد");return out}
+  }
   const maxD=iso(new Date(Date.now()+864e5));
   for(let i=hi+1;i<rows.length;i++){
     const r=rows[i],name=String(r[col.name]??"").trim();
@@ -179,14 +216,18 @@ function parseSheet(kind,rows){
       const no=normAr(r[col.inv]);
       if(!no){out.skipped++;continue}
       total++;
-      const d=parseDate(r[col.date],"mdy"),t=num(r[col.total]),p=num(r[col.paid]),rm=num(r[col.rem]);
+      const d=parseDate(r[col.date],ord.mode),t=num(r[col.total]),p=num(r[col.paid]),rm=num(r[col.rem]);
       if(!d||isNaN(t)||isNaN(p)||isNaN(rm)||d>maxD||d<"2015-01-01"){errs.push(`سطر ${ln}: الفاتورة ${no} فيها تاريخ أو رقم غير صالح`);continue}
       if(Math.abs(t-p-rm)>0.01)mism++;
-      if(seen.has(no))dupes++;
-      seen.set(no,{k:keyOf(name),n:name,no,d,t:r2(t),p:r2(p),r:r2(rm),s:String(r[col.seller]??"").trim(),x:String(r[col.notes]??"").trim()});
+      const ck=keyOf(name),ek=`${ck}|${no}|${d}`,fp=`${ek}|${r2(t)}|${r2(p)}|${r2(rm)}`;
+      if(seen.has(fp)){dupes++;continue}
+      if(grp.has(ek))conf++;
+      grp.add(ek);
+      if(!noCust.has(no))noCust.set(no,new Set());noCust.get(no).add(ck);
+      seen.set(fp,{k:ck,n:name,no,d,t:r2(t),p:r2(p),r:r2(rm),s:String(r[col.seller]??"").trim(),x:String(r[col.notes]??"").trim()});
     }else{
       total++;
-      const d=parseDate(r[col.date],"ymd"),a=num(r[col.amt]);
+      const d=parseDate(r[col.date],ord.mode),a=num(r[col.amt]);
       if(!d||isNaN(a)||d>maxD||d<"2015-01-01"){errs.push(`سطر ${ln}: دفعة فيها تاريخ أو مبلغ غير صالح`);continue}
       seen.set("p"+i,{k:keyOf(name),n:name,d,a:r2(a),x:String(r[col.notes]??"").trim()});
     }
@@ -194,8 +235,13 @@ function parseSheet(kind,rows){
   out.items=[...seen.values()];
   if(!out.items.length)out.critical.push("لا توجد صفوف صالحة في الملف");
   if(errs.length>Math.max(3,Math.floor(total*0.1)))out.critical.push(`عدد الصفوف التالفة كبير (${errs.length} من ${total})`);
-  if(errs.length)out.warnings.push(`${errs.length} صف تالف اتجاهل: ${errs.slice(0,5).join("؛ ")}${errs.length>5?"…":""}`);
-  if(dupes)out.warnings.push(`${dupes} فاتورة مكررة في الملف (اتاخدت آخر نسخة)`);
+  out.stats={total,ok:total-errs.length,bad:errs.length};
+  if(errs.length)out.warnings.push(`${errs.length} صف تالف اتجاهل (الصحيح ${total-errs.length} من ${total}): ${errs.slice(0,5).join("؛ ")}${errs.length>5?"…":""}`);
+  if(ord.ambiguous)out.warnings.push(`كل التواريخ في الملف ممكن تتفسّر بطريقتين (مثال: ${ord.ex}). اتقرت شهر/يوم/سنة زي ملفات حساباتي. راجع الفترة في المعاينة`);
+  if(dupes)out.warnings.push(`${dupes} سطر فاتورة مكرر تماماً (اتاخد مرة واحدة)`);
+  if(conf)out.warnings.push(`${conf} فاتورة بنفس العميل والرقم والتاريخ لكن مبالغ مختلفة (اتحفظت كلها، راجعها)`);
+  const multi=[...noCust.values()].filter(x=>x.size>1).length;
+  if(multi)out.warnings.push(`${multi} رقم فاتورة مستخدم لأكتر من عميل (اتحفظت كلها)`);
   if(mism)out.warnings.push(`${mism} فاتورة الإجمالي - المدفوع مش بيساوي الباقي`);
   if(dupNames.length)out.warnings.push(`أسماء مكررة في المديونيات (هتظهر مرة واحدة): ${[...new Set(dupNames)].slice(0,5).join("، ")}`);
   if(kind!=="balances"&&out.items.length){const ds=out.items.map(i=>i.d).sort();out.range={min:ds[0],max:ds[ds.length-1]}}
@@ -215,13 +261,13 @@ async function planDetail(kind,res){
   const ops=[],touched=[],big=[];let added=0,updated=0,removed=0,oldTotal=0;
   for(const k of new Set([...ex.keys(),...byK.keys()])){
     const old=(ex.get(k)?.list||[]).map(strip),fresh=byK.get(k)?.list||[];oldTotal+=old.length;
-    const nos=new Set(fresh.map(f=>f.no));
-    const keep=old.filter(o=>!inR(o.d)&&!(kind==="sales"&&nos.has(o.no)));
+    const nos=new Set(fresh.map(f=>f.no+"|"+f.d));
+    const keep=old.filter(o=>!inR(o.d)&&!(kind==="sales"&&nos.has(o.no+"|"+o.d)));
     const gone=old.filter(o=>!keep.includes(o));
     if(kind==="sales"){
-      const on=new Map(old.map(o=>[o.no,o]));
-      for(const f of fresh){const o=on.get(f.no);if(!o)added++;else if(sg(o)!==sg(f))updated++}
-      removed+=gone.filter(g=>!nos.has(g.no)).length;
+      const on=new Map(old.map(o=>[o.no+"|"+o.d,o]));
+      for(const f of fresh){const o=on.get(f.no+"|"+f.d);if(!o)added++;else if(sg(o)!==sg(f))updated++}
+      removed+=gone.filter(g=>!nos.has(g.no+"|"+g.d)).length;
     }else{
       const cnt=new Map();
       gone.map(sg).forEach(s=>cnt.set(s,(cnt.get(s)||0)+1));
@@ -233,7 +279,7 @@ async function planDetail(kind,res){
     const n=byK.get(k)?.n||ex.get(k)?.n||"";
     if(JSON.stringify(nl).length>800000)big.push(n);
     touched.push({k,n,list:nl});
-    ops.push(nl.length?{type:"set",ref:doc(db,"company","data",coll,k),data:{n,list:nl}}:{type:"del",ref:doc(db,"company","data",coll,k)});
+    {const ref=doc(db,"company","data",coll,k),u=ex.has(k)?{type:"set",ref,data:ex.get(k)}:{type:"del",ref};ops.push(nl.length?{type:"set",ref,data:{n,list:nl},u}:{type:"del",ref,u})}
   }
   return {ops,touched,added,updated,removed,big,oldTotal};
 }
@@ -248,7 +294,7 @@ async function makePlan(kind,res){
     const gone=old.filter(o=>!nk.has(o.k));
     lines.push(`عملاء في الملف: ${res.items.length}`,`عملاء جدد: ${res.items.filter(i=>!om.has(i.k)).length}`,`أرصدة اتغيّرت: ${res.items.filter(i=>om.has(i.k)&&om.get(i.k).bal!==i.bal).length}`,`عملاء هيتشالوا من القايمة بس وتاريخهم هيفضل محفوظ (مش في الملف): ${gone.length}${gone.length?` (مثال: ${gone.slice(0,3).map(g=>g.n).join("، ")})`:""}`);
     if(old.length)ops.push({type:"set",ref:doc(db,"admin","backup_customers"),data:{rows:old,at:Date.now()}});
-    ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows}});
+    ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows},u:exists?{type:"set",ref:doc(db,"company","customers"),data:{rows:old}}:null});
   }else{
     if(!exists)crit.push("ارفع ملف المديونيات الأول");
     const p=await planDetail(kind,res);
@@ -269,16 +315,25 @@ async function makePlan(kind,res){
       const best=new Map();
       for(const i of res.items){const b=best.get(i.k);if(!b||i.d>b.d||(i.d===b.d&&(parseFloat(i.no)||0)>(parseFloat(b.no)||0)))best.set(i.k,i)}
       for(const r of rows){if(!r.li&&best.has(r.k)){const b=best.get(r.k);r.li=b.d;r.lt=b.t;r.lp=b.p;r.lr=b.r}}
-      ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows}});
+      ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows},u:{type:"set",ref:doc(db,"company","customers"),data:{rows:old}}});
     }
   }
   return {crit,lines,ops,drop};
 }
 async function runBatches(ops){
-  for(let i=0;i<ops.length;i+=400){
-    const b=writeBatch(db);
-    ops.slice(i,i+400).forEach(o=>o.type==="del"?b.delete(o.ref):b.set(o.ref,o.data));
-    await b.commit();
+  const done=[],go=async(list,undo)=>{
+    for(let i=0;i<list.length;i+=400){
+      const b=writeBatch(db),part=list.slice(i,i+400);
+      part.forEach(o=>{const x=undo?o.u:o;x.type==="del"?b.delete(x.ref):b.set(x.ref,x.data)});
+      await b.commit();
+      if(!undo)done.push(...part);
+    }
+  };
+  try{await go(ops,false)}
+  catch(e){
+    let ok=true;
+    try{await go(done.filter(o=>o.u),true)}catch(e2){ok=false}
+    throw new Error(ok?"الحفظ فشل واتعمل رجوع للحالة القديمة، مفيش حاجة اتغيّرت":"الحفظ فشل والرجوع للحالة القديمة اتعثّر. ارفع نفس الملف تاني قبل ما حد يستخدم التطبيق");
   }
 }
 async function commit(kind,res,fileName){
@@ -417,7 +472,7 @@ function idleHtml(){
 function stmtCalc(bal,inv,pay,from,to){
   const mv=[];
   inv.forEach(r=>mv.push({d:r.d,o:0,no:r.no,l:"فاتورة رقم "+r.no,dr:r.t,cr:0}));
-  pay.forEach(r=>mv.push({d:r.d,o:1,no:"",l:"دفعة"+(r.x?" - "+r.x:""),dr:0,cr:r.a}));
+  pay.forEach(r=>mv.push({d:r.d,o:1,no:"",l:"دفعة"+(r.x?" - "+r.x:""),x:r.x||"",dr:0,cr:r.a}));
   mv.sort((a,b)=>a.d.localeCompare(b.d)||a.o-b.o||((parseFloat(a.no)-parseFloat(b.no))||0));
   const net=a=>a.reduce((s,m)=>s+m.dr-m.cr,0);
   const open=r2(bal-net(mv.filter(m=>m.d>=from)));
@@ -453,9 +508,25 @@ function stmtView(c,inv,pay){
   out();scrollTo(0,0);
 }
 
+function invDays(c,inv,pay){
+  if(!inv.length)return '<div class="empty">لا توجد فواتير</div>';
+  const days=[],m=new Map();
+  for(const r of inv){if(!m.has(r.d)){m.set(r.d,[]);days.push(r.d)}m.get(r.d).push(r)}
+  return days.map(d=>{
+    const list=[...m.get(d)].sort((a,b)=>(parseFloat(a.no)||0)-(parseFloat(b.no)||0));
+    const R=c.bal==null||!isD(d)?null:stmtCalc(c.bal,inv,pay,d,d);
+    return `<div class="panel day"><div class="dh"><b>${fd(d)}</b>${R?`<span class="mut">رصيده قبل اليوم: <b>${fm(R.open)}</b></span>`:""}</div>${list.map(r=>`<div class="iv"><div class="ivh"><span>فاتورة رقم ${esc(r.no)}</span><span class="mut">${r.s?esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></div><div class="i3"><div><small>أخد بـ</small><b>${fm(r.t)}</b></div><div><small>دفع منها</small><b class="ok">${fm(r.p)}</b></div><div><small>باقي منها</small><b class="${r.r>0?"debt":"ok"}">${fm(r.r)}</b></div></div></div>`).join("")}${R?`<div class="df">مشتريات اليوم: <b>${fm(R.dr)}</b> · مدفوعات اليوم: <b>${fm(R.cr)}</b><br>${fm(R.open)} + ${fm(R.dr)} − ${fm(R.cr)} = <b>رصيده آخر اليوم ${fm(R.close)}</b></div>`:""}</div>`;
+  }).join("");
+}
+function payList(c,inv,pay){
+  if(!pay.length)return '<div class="empty">لا توجد دفعات</div>';
+  const rows=c.bal==null?null:stmtCalc(c.bal,inv,pay,"0000-01-01","9999-12-31").rows.filter(m=>m.cr>0).reverse();
+  const src=rows||pay.map(p=>({d:p.d,cr:p.a,x:p.x}));
+  return src.map(m=>`<div class="item"><span>${fd(m.d)}<br><span class="mut">${esc(m.x||"")}</span>${m.bal!=null?`<br><span class="bal">رصيده بعد الدفعة: <b>${fm(m.bal)}</b></span>`:""}</span><b class="ok">${fm(m.cr)}</b></div>`).join("");
+}
 async function openCustomer(k){
   const c=st.rows.find(r=>r.k===k);if(!c)return;
-  const head=`<button class="back" data-act="back">‹ رجوع</button><div class="panel"><div class="mut">${esc(c.n)}${c.st?' <span class="badge">مش في آخر ملف مديونيات</span>':""}</div><div class="big ${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</div><div class="mut">رصيد حساب العميل الحالي${c.bal<0?" (له رصيد عندنا)":""}</div>${[c.ph,c.mb].filter(Boolean).map(p=>`<div style="margin-top:6px"><a href="tel:${esc(p)}">اتصال ${esc(p)}</a></div>`).join("")}</div>`;
+  const head=`<button class="back" data-act="back">‹ رجوع</button><div class="panel"><div class="mut">${esc(c.n)}${c.st?' <span class="badge">مش في آخر ملف مديونيات</span>':""}</div><div class="big ${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</div><div class="mut">${c.bal>0?"المطلوب سداده دلوقتي":c.bal<0?"له رصيد عندنا":"رصيد حساب العميل الحالي"}</div>${[c.ph,c.mb].filter(Boolean).map(p=>`<div style="margin-top:6px"><a href="tel:${esc(p)}">اتصال ${esc(p)}</a></div>`).join("")}</div>`;
   drawShell(head+'<div id="dd" class="empty">جاري التحميل…</div>');
   let inv=[],pay=[];
   try{
@@ -465,7 +536,7 @@ async function openCustomer(k){
   const last=inv[0];let tab="s";
   const draw=()=>{
     $("#dd").className="";
-    $("#dd").innerHTML=`<div class="panel"><div class="mut">آخر فاتورة</div>${last?`<div style="font-weight:800">${fm(last.t)} بتاريخ ${fd(last.d)}</div><div class="mut">رقم ${esc(last.no)} · مدفوع ${fm(last.p)} · متبقي من الفاتورة ${fm(last.r)}</div>`:'<div class="mut">لا توجد فواتير في الفترة المحفوظة</div>'}</div><div class="chips"><button class="chip" id="stb">كشف حساب</button></div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?(inv.map((r,i)=>daySum(c,inv,pay,i)+`<div class="item"><span>${fd(r.d)}<br><span class="mut">رقم ${esc(r.no)}${r.s?" · "+esc(r.s):""}${r.x?" · "+esc(r.x):""}</span></span><span style="text-align:left"><span class="mut">قيمة الفاتورة</span> <b>${fm(r.t)}</b><br><span class="mut">مدفوع ${fm(r.p)} · متبقي من الفاتورة ${fm(r.r)}</span><br><span class="bal">رصيد حساب العميل الحالي: <b class="${c.bal>0?"debt":"ok"}">${c.bal==null?"—":fm(c.bal)}</b></span></span></div>`).join("")||'<div class="empty">لا توجد فواتير</div>'):(pay.map(r=>`<div class="item"><span>${fd(r.d)}<br><span class="mut">${esc(r.x||"")}</span></span><b class="ok">${fm(r.a)}</b></div>`).join("")||'<div class="empty">لا توجد دفعات</div>')}</div>`;
+    $("#dd").innerHTML=`${last?`<div class="mut" style="margin:4px 0">آخر فاتورة: ${fd(last.d)} بقيمة ${fm(last.t)}</div>`:""}<div class="chips"><button class="chip" id="stb">كشف حساب</button></div><div class="tabs" role="tablist"><button role="tab" data-t="s" aria-selected="${tab==="s"}">الفواتير (${inv.length})</button><button role="tab" data-t="p" aria-selected="${tab==="p"}">الدفعات (${pay.length})</button></div><div>${tab==="s"?invDays(c,inv,pay):payList(c,inv,pay)}</div>`;
     $("#dd").querySelector(".tabs").onclick=e=>{const b=e.target.closest("[data-t]");if(b){tab=b.dataset.t;draw()}};
     $("#stb").onclick=()=>stmtView(c,inv,pay);
   };
@@ -723,8 +794,9 @@ async function onApply(kind,btn){
   try{
     const plan=await commit(kind,p.res,p.name);
     delete pending[kind];await loadData();
-    if(kind!=="balances"){$("#pv-"+kind).innerHTML='<div class="mut">جاري تحديث التقارير…</div>';try{await buildReports();await loadData()}catch(e){}}
-    $("#pv-"+kind).innerHTML=`<div class="okb">تم الحفظ بنجاح.<ul>${plan.lines.map(l=>`<li>${esc(l)}</li>`).join("")}</ul></div>`;
+    let repErr="";
+    if(kind!=="balances"){$("#pv-"+kind).innerHTML='<div class="mut">جاري تحديث التقارير…</div>';try{await buildReports();st.led=undefined;await loadData()}catch(e){repErr=(e&&e.message)||"خطأ غير معروف"}}
+    $("#pv-"+kind).innerHTML=`<div class="okb">تم حفظ الملف بنجاح.${kind!=="balances"&&!repErr?" وتم تحديث التقارير.":""}<ul>${plan.lines.map(l=>`<li>${esc(l)}</li>`).join("")}</ul></div>${repErr?`<div class="err">الملف اتحفظ، لكن تحديث التقارير فشل (${esc(repErr)}). التقارير لسه بالأرقام القديمة. دوس "تحديث التقارير" من تبويب التقارير.</div>`:""}`;
     loadLogs();
   }catch(e){
     $("#pv-"+kind).innerHTML=`<div class="err">فشل الحفظ: ${esc(e.message||e)}. اتأكد من البيانات وجرّب تاني قبل ما تعتمد أي حاجة.</div>`;
