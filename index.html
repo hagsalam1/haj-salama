@@ -259,14 +259,16 @@ async function makePlan(kind,res){
     lines.push(`هيتشال من التطبيق (مش في الملف): ${p.removed} من ${p.oldTotal} محفوظ`);
     ops=p.ops;
     const known=new Set(old.map(r=>r.k)),unk=[...new Set(res.items.filter(i=>!known.has(i.k)).map(i=>i.n))];
-    if(unk.length)lines.push(`تنبيه: ${unk.length} عميل مش موجودين في المديونيات (مثال: ${unk.slice(0,3).join("، ")})`);
-    if(kind==="sales"&&exists&&p.touched.length){
+    if(unk.length)lines.push(`${unk.length} عميل في الملف مش في المديونيات، مش هيظهروا في قايمة العملاء (مثال: ${unk.slice(0,3).join("، ")})`);
+    if(kind==="sales"&&exists){
       const rm=new Map(old.map(r=>[r.k,{...r}])),rows=[...rm.values()];
       for(const t of p.touched){
-        let r=rm.get(t.k);
-        if(!r){r={k:t.k,n:t.n,ph:"",mb:"",bal:null,li:"",lt:null,lp:null,lr:null};rm.set(t.k,r);rows.push(r)}
+        const r=rm.get(t.k);if(!r)continue;
         const top=t.list[0];r.li=top?top.d:"";r.lt=top?top.t:null;r.lp=top?top.p:null;r.lr=top?top.r:null;
       }
+      const best=new Map();
+      for(const i of res.items){const b=best.get(i.k);if(!b||i.d>b.d||(i.d===b.d&&(parseFloat(i.no)||0)>(parseFloat(b.no)||0)))best.set(i.k,i)}
+      for(const r of rows){if(!r.li&&best.has(r.k)){const b=best.get(r.k);r.li=b.d;r.lt=b.t;r.lp=b.p;r.lr=b.r}}
       ops.push({type:"set",ref:doc(db,"company","customers"),data:{rows}});
     }
   }
@@ -414,8 +416,8 @@ function idleHtml(){
 /* ---------- كشف الحساب ---------- */
 function stmtCalc(bal,inv,pay,from,to){
   const mv=[];
-  inv.forEach(r=>mv.push({d:r.d,o:0,no:r.no,l:"فاتورة بيع رقم "+r.no,dr:r.t,cr:0}));
-  pay.forEach(r=>mv.push({d:r.d,o:1,no:"",l:"تحصيل"+(r.x?" - "+r.x:""),dr:0,cr:r.a}));
+  inv.forEach(r=>mv.push({d:r.d,o:0,no:r.no,l:"فاتورة رقم "+r.no,dr:r.t,cr:0}));
+  pay.forEach(r=>mv.push({d:r.d,o:1,no:"",l:"دفعة"+(r.x?" - "+r.x:""),dr:0,cr:r.a}));
   mv.sort((a,b)=>a.d.localeCompare(b.d)||a.o-b.o||((parseFloat(a.no)-parseFloat(b.no))||0));
   const net=a=>a.reduce((s,m)=>s+m.dr-m.cr,0);
   const open=r2(bal-net(mv.filter(m=>m.d>=from)));
@@ -427,7 +429,7 @@ function daySum(c,inv,pay,i){
   const d=inv[i].d;if(i&&inv[i-1].d===d)return"";
   if(c.bal==null||!/^\d{4}-\d{2}-\d{2}$/.test(d||""))return"";
   const R=stmtCalc(c.bal,inv,pay,d,d);
-  return `<div class="panel" style="margin:12px 0 4px"><b>ملخص حساب العميل يوم ${fd(d)}</b><div class="mut" style="line-height:1.9">رصيد أول اليوم: <b>${fm(R.open)}</b><br>مشتريات اليوم: <b>${fm(R.dr)}</b><br>مدفوعات اليوم: <b>${fm(R.cr)}</b><br>مرتجعات اليوم: غير محسوبة لسه<br>رصيد آخر اليوم: <b>${fm(R.close)}</b></div></div>`;
+  return `<div class="panel" style="margin:12px 0 4px"><b>ملخص حساب العميل يوم ${fd(d)}</b><div class="mut" style="line-height:1.9">رصيد أول اليوم: <b>${fm(R.open)}</b><br>مشتريات اليوم: <b>${fm(R.dr)}</b><br>مدفوعات اليوم: <b>${fm(R.cr)}</b><br>رصيد آخر اليوم: <b>${fm(R.close)}</b></div></div>`;
 }
 function stmtView(c,inv,pay){
   const today=iso(new Date()),all=[...inv,...pay].map(x=>x.d).sort(),minD=all[0]||"";
@@ -438,14 +440,14 @@ function stmtView(c,inv,pay){
     if(!f||!t||f>t){box.innerHTML='<div class="warn">اختار فترة صحيحة</div>';return}
     if(c.bal==null){box.innerHTML='<div class="warn">مفيش رصيد حالي للعميل، مش هقدر أحسب الكشف.</div>';return}
     const R=stmtCalc(c.bal,inv,pay,f,t);cur={R,f,t};
-    box.innerHTML=`<div style="text-align:center"><b>الحاج سلامة للمجمدات</b><br>كشف حساب: ${esc(c.n)}<br><span class="mut">من ${fd(f)} إلى ${fd(t)}</span></div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>التاريخ</th><th>البيان</th><th class="n">مدين</th><th class="n">دائن</th><th class="n">الرصيد</th></tr></thead><tbody><tr><td>${fd(f)}</td><td>رصيد أول المدة</td><td></td><td></td><td class="n"><b>${fm(R.open)}</b></td></tr>${R.rows.map(m=>`<tr><td>${fd(m.d)}</td><td>${esc(m.l)}</td><td class="n">${m.dr?fm(m.dr):""}</td><td class="n">${m.cr?fm(m.cr):""}</td><td class="n">${fm(m.bal)}</td></tr>`).join("")}<tr><td>${fd(t)}</td><td><b>رصيد آخر المدة</b></td><td class="n">${fm(R.dr)}</td><td class="n">${fm(R.cr)}</td><td class="n"><b>${fm(R.close)}</b></td></tr></tbody></table></div><div class="mut" style="margin-top:10px">المرتجعات مش محسوبة في الكشف لسه. الأرصدة محسوبة رجوعاً من رصيد آخر ملف مديونيات (آخر تحديث: ${esc(updated())}).${minD&&f<minD?` أول حركة محفوظة بتاريخ ${fd(minD)}، فرصيد أول المدة قبلها محسوب مش مؤكد.`:""}</div>`;
+    box.innerHTML=`<div style="text-align:center"><img src="${LOGO}" alt="الحاج سلامة للمجمدات" style="width:150px;max-width:60%;border-radius:16px;display:block;margin:0 auto 8px"><b style="font-size:18px">كشف حساب</b><br><b>${esc(c.n)}</b><br><span class="mut">من ${fd(f)} إلى ${fd(t)}</span></div><div class="cards" style="margin-top:12px"><div class="card"><small>المشتريات في الفترة (عليك)</small><b>${fm(R.dr)}</b></div><div class="card"><small>المسدد في الفترة</small><b class="ok">${fm(R.cr)}</b></div></div><div class="panel" style="text-align:center;margin-top:8px"><div class="mut">${R.close<0?"رصيد لك عندنا":"الرصيد المتبقي المطلوب سداده"}</div><div class="${R.close>0?"debt":"ok"}" style="font-size:26px;font-weight:800">${fm(Math.abs(R.close))} جنيه</div></div><div style="overflow-x:auto"><table class="tbl"><thead><tr><th>التاريخ</th><th>البيان</th><th class="n">المشتريات</th><th class="n">المسدد</th><th class="n">الرصيد</th></tr></thead><tbody><tr><td>${fd(f)}</td><td>الرصيد قبل الفترة</td><td></td><td></td><td class="n"><b>${fm(R.open)}</b></td></tr>${R.rows.map(m=>`<tr><td>${fd(m.d)}</td><td>${esc(m.l)}</td><td class="n">${m.dr?fm(m.dr):""}</td><td class="n">${m.cr?fm(m.cr):""}</td><td class="n">${fm(m.bal)}</td></tr>`).join("")}<tr><td>${fd(t)}</td><td><b>الرصيد المتبقي</b></td><td class="n">${fm(R.dr)}</td><td class="n">${fm(R.cr)}</td><td class="n"><b>${fm(R.close)}</b></td></tr></tbody></table></div><div class="mut" style="margin-top:10px">أي مرتجع اتسجل كدفعة في حساباتي بيظهر ضمن المسدد. الرصيد محسوب من آخر ملف مديونيات (آخر تحديث: ${esc(updated())}).${minD&&f<minD?` أول حركة محفوظة بتاريخ ${fd(minD)}، فالرصيد قبلها محسوب مش مؤكد.`:""}</div>`;
   };
   $("#sf").onchange=out;$("#se").onchange=out;
   $("#sbk").onclick=()=>openCustomer(c.k);
   $("#sp").onclick=()=>window.print();
   $("#sx").onclick=async e=>{
     if(!cur)return;const b=e.currentTarget,{R,f,t}=cur;b.disabled=true;
-    try{await xport("كشف-حساب-"+c.n.replace(/[\\\/:*?"<>|]/g,"").slice(0,25),[["الكشف",[["العميل",c.n],["من",f],["إلى",t],[],["التاريخ","البيان","مدين","دائن","الرصيد"],[f,"رصيد أول المدة","","",R.open],...R.rows.map(m=>[m.d,m.l,m.dr||"",m.cr||"",m.bal]),[t,"رصيد آخر المدة",R.dr,R.cr,R.close]]]])}catch(err){alert("تعذّر التصدير")}
+    try{await xport("كشف-حساب-"+c.n.replace(/[\\\/:*?"<>|]/g,"").slice(0,25),[["الكشف",[["العميل",c.n],["من",f],["إلى",t],[],["التاريخ","البيان","المشتريات","المسدد","الرصيد"],[f,"الرصيد قبل الفترة","","",R.open],...R.rows.map(m=>[m.d,m.l,m.dr||"",m.cr||"",m.bal]),[t,"الرصيد المتبقي",R.dr,R.cr,R.close]]]])}catch(err){alert("تعذّر التصدير")}
     b.disabled=false;
   };
   out();scrollTo(0,0);
@@ -557,7 +559,7 @@ function repBody(){
   const L=st.led;
   if(L===false)return repEmpty();
   if(!L)return '<div class="empty">جاري التحميل…</div>';
-  if(RP.tab==="ret")return '<div class="warn">تقرير المرتجعات لسه مش شغّال: ملف المرتجعات مش موجود في النظام. هيتفعّل أول ما يتضاف.</div>';
+  if(RP.tab==="ret")return '<div class="warn">المرتجعات اللي بتتسجل في حساباتي كدفعة داخلة في التحصيلات. مفيش تقرير مرتجعات منفصل لأن مفيش ملف مرتجعات.</div>';
   const [a,b]=rpRange(),R=repTables(RP.tab,a,b,L,st.rows);st.sheets=[];
   return `<div class="cards">${R.cards.map(([l,v,c])=>`<div class="card"><small>${l}</small><b class="${c||""}">${v}</b></div>`).join("")}</div>${R.tables.map(tblHtml).join("")}<div class="mut" style="margin-top:10px">آخر تحديث للتقارير: ${new Date(L.inv.at).toLocaleString("ar-EG",{dateStyle:"medium",timeStyle:"short"})}</div>`;
 }
@@ -626,7 +628,7 @@ function alertHtml(){
   const T=[["all","الكل"],["debts","المديونيات"],["idle","الأقل نشاطاً"],["inv","الفواتير"],["ret","المرتجعات"],["data","تحديث البيانات"]];
   const sortChips=`<div class="chips"><button class="chip" data-asort="desc" aria-pressed="${st.asort==="desc"}">الأعلى أياماً إلى الأقل</button><button class="chip" data-asort="asc" aria-pressed="${st.asort==="asc"}">الأقل أياماً إلى الأعلى</button></div>`;
   const dayChips=`<div class="sub">${[30,60,90,120].map(n=>`<button class="chip" data-al="d:${n}" aria-pressed="${A.days===n}">${n} يوم</button>`).join("")}<input type="number" id="ald" min="1" value="${A.days}" style="width:90px" aria-label="عدد الأيام"></div>`;
-  const body=A.tab==="ret"?'<div class="warn">تنبيهات المرتجعات لسه مش شغّالة: ملف المرتجعات مش موجود في النظام.</div>':(lists[A.tab].slice(0,A.tab==="all"?60:400).map(x=>x.h).join("")||'<div class="empty">لا توجد تنبيهات</div>');
+  const body=A.tab==="ret"?'<div class="warn">مفيش تنبيهات مرتجعات: المرتجعات بتظهر كدفعات في ملف الدفعات.</div>':(lists[A.tab].slice(0,A.tab==="all"?60:400).map(x=>x.h).join("")||'<div class="empty">لا توجد تنبيهات</div>');
   return `<div class="sub">${T.map(([k,l])=>`<button class="chip" data-al="tab:${k}" aria-pressed="${A.tab===k}">${l} (${cnt(k)})</button>`).join("")}</div>${A.tab==="idle"?dayChips:""}${A.tab==="idle"||A.tab==="debts"?sortChips:""}<div>${body}</div>${A.tab==="all"&&lists.all.length>60?'<div class="mut">معروض أهم 60 تنبيه. باقي التفاصيل في التبويبات.</div>':""}<div class="chips"><button class="chip" data-act="xalert">تصدير Excel</button></div>`;
 }
 function alShow(){drawShell(alertHtml());const e=$("#ald");if(e)e.onchange=()=>{const n=parseInt(e.value);if(n>0){st.al.days=n;alShow()}}}
